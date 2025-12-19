@@ -1,8 +1,13 @@
+from openai import OpenAI
 from swarm import Swarm, Agent
-from config import MODEL
+from config import MODEL, OPENAI_API_KEY, OPENAI_BASE_URL
 import tools
 
-client = Swarm()
+custom_client = OpenAI(
+    api_key=OPENAI_API_KEY,
+    base_url=OPENAI_BASE_URL
+)
+client = Swarm(client=custom_client)
 
 # --- Handoff Functions ---
 def transfer_to_executor(): return executor_agent

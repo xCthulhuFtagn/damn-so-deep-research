@@ -2,7 +2,7 @@ import subprocess
 import hashlib
 import sqlite3
 from duckduckgo_search import DDGS
-from config import DB_NAME
+from config import DB_PATH
 import database
 
 # --- External Tools ---
@@ -32,7 +32,7 @@ def execute_terminal_command(command: str):
     """
     cmd_hash = hashlib.md5(command.encode()).hexdigest()
     
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     row = c.execute("SELECT approved FROM approvals WHERE command_hash = ?", (cmd_hash,)).fetchone()
     

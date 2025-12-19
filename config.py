@@ -1,16 +1,20 @@
 import os
+import sys
+from pathlib import Path
+from dotenv import load_dotenv
 
-# --- Configuration ---
-# Замените на свой ключ
-OPENAI_API_KEY = "sk-..." 
-MODEL = "gpt-4o" 
+# Загружаем переменные из .env
+env_path = Path('.') / '.env'
+load_dotenv(dotenv_path=env_path)
 
-# Имя файла базы данных
-DB_NAME = "research_state.db"
+# Настройки LLM
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL") # Если None, будет использоваться стандартный OpenAI
+MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
 
-# Максимальное кол-во ходов в одной итерации Swarm
-MAX_TURNS = 25
-
-# Применяем ключ к окружению
-os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
-
+# Инфраструктура
+DB_NAME = os.getenv("DB_NAME", "research_state.db")
+MAX_TURNS = int(os.getenv("MAX_TURNS", 25))
+# Путь к базе данных
+BASE_DIR = Path(__file__).resolve().parent
+DB_PATH = str(BASE_DIR / DB_NAME)

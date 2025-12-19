@@ -1,9 +1,9 @@
 import sqlite3
 import pandas as pd
-from config import DB_NAME
+from config import DB_PATH # <--- ИЗМЕНЕНО (было DB_PATH)
 
 def init_db():
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     
     # Таблица Плана
@@ -29,7 +29,7 @@ def init_db():
 
 def clear_db():
     """Очистка базы для новой сессии"""
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("DELETE FROM plan")
     c.execute("DELETE FROM approvals")
@@ -39,7 +39,7 @@ def clear_db():
 # --- Plan Operations ---
 
 def add_plan_step(description, step_number):
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     # Проверяем дубликаты по номеру шага, если нужно, или просто вставляем
     c.execute("INSERT INTO plan (description, step_number) VALUES (?, ?)", (description, step_number))
@@ -48,14 +48,14 @@ def add_plan_step(description, step_number):
 
 def get_next_step():
     """Возвращает первый невыполненный шаг"""
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(DB_PATH)
     # Берем TODO или IN_PROGRESS, сортируем по номеру
     df = pd.read_sql_query("SELECT * FROM plan WHERE status IN ('TODO', 'IN_PROGRESS') ORDER BY step_number LIMIT 1", conn)
     conn.close()
     return df.iloc[0] if not df.empty else None
 
 def update_step_status(step_id, status, result=None):
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     if result:
         c.execute("UPDATE plan SET status = ?, result = ? WHERE id = ?", (status, result, step_id))
@@ -66,14 +66,14 @@ def update_step_status(step_id, status, result=None):
 
 def get_all_plan():
     """Для отображения в UI"""
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(DB_PATH)
     df = pd.read_sql_query("SELECT * FROM plan ORDER BY step_number", conn)
     conn.close()
     return df
 
 def get_completed_steps_count():
     """Для логики очистки памяти"""
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     count = c.execute("SELECT COUNT(*) FROM plan WHERE status='DONE'").fetchone()[0]
     conn.close()
@@ -81,7 +81,7 @@ def get_completed_steps_count():
 
 def get_done_results_text():
     """Возвращает контекст выполненных шагов для агентов"""
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(DB_PATH)
     df = pd.read_sql_query("SELECT step_number, description, result FROM plan WHERE status='DONE' ORDER BY step_number", conn)
     conn.close()
     
