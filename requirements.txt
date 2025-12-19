@@ -1,0 +1,6 @@
+openai>=1.0.0
+streamlit
+duckduckgo-search
+pandas
+git+https://github.com/openai/swarm.git
+
