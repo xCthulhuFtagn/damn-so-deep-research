@@ -38,9 +38,20 @@ def init_db():
                     role TEXT,
                     content TEXT,
                     tool_calls TEXT,
+                    tool_call_id TEXT,
                     sender TEXT,
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
                 )''')
+    
+    # Таблица Глобального Состояния
+    c.execute('''CREATE TABLE IF NOT EXISTS global_state (
+                    key TEXT PRIMARY KEY,
+                    value INTEGER
+                )''')
+    
+    # Инициализация дефолтных значений, если их нет
+    c.execute("INSERT OR IGNORE INTO global_state (key, value) VALUES ('swarm_running', 0)")
+    c.execute("INSERT OR IGNORE INTO global_state (key, value) VALUES ('stop_requested', 0)")
     
     conn.commit()
     conn.close()
@@ -54,9 +65,53 @@ def clear_db():
     c.execute("DELETE FROM plan")
     c.execute("DELETE FROM approvals")
     c.execute("DELETE FROM messages")
+    # Сбрасываем флаги в global_state
+    c.execute("UPDATE global_state SET value = 0 WHERE key = 'swarm_running'")
+    c.execute("UPDATE global_state SET value = 0 WHERE key = 'stop_requested'")
     conn.commit()
     conn.close()
     logger.debug("DB clear done")
+
+# --- Global State Operations ---
+
+def set_swarm_running(running: bool):
+    """Sets the swarm_running flag in global_state."""
+    val = 1 if running else 0
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE global_state SET value = ? WHERE key = 'swarm_running'", (val,))
+    # Если мы останавливаем рой, сбрасываем сигнал остановки
+    if not running:
+        c.execute("UPDATE global_state SET value = 0 WHERE key = 'stop_requested'")
+    conn.commit()
+    conn.close()
+    logger.debug("DB set_swarm_running: %s", running)
+
+def is_swarm_running() -> bool:
+    """Checks if the swarm is currently running."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    row = c.execute("SELECT value FROM global_state WHERE key = 'swarm_running'").fetchone()
+    conn.close()
+    return bool(row[0]) if row else False
+
+def set_stop_signal(requested: bool):
+    """Sets the stop_requested flag in global_state."""
+    val = 1 if requested else 0
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("UPDATE global_state SET value = ? WHERE key = 'stop_requested'", (val,))
+    conn.commit()
+    conn.close()
+    logger.info("DB set_stop_signal: %s", requested)
+
+def should_stop() -> bool:
+    """Checks if a stop has been requested."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    row = c.execute("SELECT value FROM global_state WHERE key = 'stop_requested'").fetchone()
+    conn.close()
+    return bool(row[0]) if row else False
 
 # --- Plan Operations ---
 
@@ -102,6 +157,30 @@ def get_all_plan():
     logger.debug("DB get_all_plan: rows=%s", len(df))
     return df
 
+
+def get_max_step_number() -> int:
+    """Returns the maximum step_number in the plan (0 if empty)."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    row = c.execute("SELECT COALESCE(MAX(step_number), 0) FROM plan").fetchone()
+    conn.close()
+    return int(row[0]) if row and row[0] is not None else 0
+
+
+def get_existing_step_numbers() -> set[int]:
+    """Returns a set of all step_number values currently in the plan."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    rows = c.execute("SELECT step_number FROM plan").fetchall()
+    conn.close()
+    out: set[int] = set()
+    for (num,) in rows:
+        try:
+            out.add(int(num))
+        except Exception:
+            continue
+    return out
+
 def get_completed_steps_count():
     """Для логики очистки памяти"""
     conn = sqlite3.connect(DB_PATH)
@@ -129,14 +208,14 @@ def get_done_results_text():
 
 # --- Message Persistence ---
 
-def save_message(role: str, content: str, tool_calls: list = None, sender: str = None):
+def save_message(role: str, content: str, tool_calls: list = None, tool_call_id: str = None, sender: str = None):
     """Saves a message to the database."""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     tool_calls_json = json.dumps(tool_calls) if tool_calls else None
     c.execute(
-        "INSERT INTO messages (role, content, tool_calls, sender) VALUES (?, ?, ?, ?)",
-        (role, content, tool_calls_json, sender)
+        "INSERT INTO messages (role, content, tool_calls, tool_call_id, sender) VALUES (?, ?, ?, ?, ?)",
+        (role, content, tool_calls_json, tool_call_id, sender)
     )
     conn.commit()
     conn.close()
@@ -146,17 +225,18 @@ def load_messages():
     """Loads all messages from the database."""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT role, content, tool_calls, sender FROM messages ORDER BY id")
+    c.execute("SELECT role, content, tool_calls, tool_call_id, sender FROM messages ORDER BY id")
     rows = c.fetchall()
     conn.close()
     
     messages = []
     for row in rows:
-        role, content, tool_calls_json, sender = row
+        role, content, tool_calls_json, tool_call_id, sender = row
         msg = {
             "role": role,
             "content": content,
-            "sender": sender
+            "sender": sender,
+            "tool_call_id": tool_call_id
         }
         if tool_calls_json:
             msg["tool_calls"] = json.loads(tool_calls_json)
@@ -164,3 +244,57 @@ def load_messages():
     
     logger.debug("DB load_messages: count=%s", len(messages))
     return messages
+
+def clear_messages():
+    """Clears all messages from the database."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("DELETE FROM messages")
+    conn.commit()
+    conn.close()
+    logger.debug("DB clear_messages done")
+
+
+def has_pending_approvals() -> bool:
+    """Returns True if there are terminal commands awaiting approval."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    row = c.execute("SELECT COUNT(*) FROM approvals WHERE approved = 0").fetchone()
+    conn.close()
+    return bool(row[0]) if row else False
+
+
+def prune_messages_for_ui():
+    """
+    Reduce chat noise without breaking user-visible history.
+    Keeps:
+      - user messages
+      - assistant messages with non-empty content and without tool_calls
+      - system messages that look like errors (so UI can show failures)
+    Removes:
+      - tool messages
+      - assistant tool-call wrapper messages (tool_calls != NULL)
+      - empty assistant messages
+      - non-error system messages
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        """
+        DELETE FROM messages
+        WHERE
+          role = 'tool'
+          OR (role = 'assistant' AND tool_calls IS NOT NULL)
+          OR (role = 'assistant' AND (content IS NULL OR TRIM(content) = ''))
+          OR (
+            role = 'system'
+            AND (
+              content IS NULL
+              OR (content NOT LIKE '%Error%' AND LOWER(content) NOT LIKE '%failed%')
+            )
+          )
+        """
+    )
+    conn.commit()
+    conn.close()
+    logger.debug("DB prune_messages_for_ui done")

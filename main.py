@@ -4,12 +4,13 @@ import pandas as pd
 import logging
 import re
 import json
-import openai
 
 from logging_setup import setup_logging
-from agents import client, planner_agent, executor_agent
+from research_agents import planner_agent, executor_agent
 import database
-from config import DB_NAME, MAX_TURNS
+from runner import runner
+from config import DB_NAME, MAX_TURNS, DB_PATH
+import time
 
 # Configure logging as early as possible (Streamlit reruns safe)
 setup_logging()
@@ -76,16 +77,24 @@ if "done_steps_count" not in st.session_state:
 # --- Sidebar ---
 st.sidebar.title("🎛️ Control Center")
 
-# Кнопка полного сброса
-if st.sidebar.button("Reset Research"):
-    logger.info("User requested reset: clearing DB and UI state")
-    database.clear_db()
-    st.session_state.messages = []
-    st.session_state.done_steps_count = 0
-    st.rerun()
+# Кнопка полной остановки (только если рой запущен)
+if database.is_swarm_running():
+    if st.sidebar.button("🛑 Stop Research", type="primary"):
+        logger.info("User requested stop")
+        database.set_stop_signal(True)
+        st.toast("Stopping swarm...", icon="🛑")
+else:
+    # Кнопка полного сброса (только если рой НЕ запущен)
+    if st.sidebar.button("Reset Research"):
+        logger.info("User requested reset: clearing DB and UI state")
+        database.clear_db()
+        st.session_state.messages = []
+        st.session_state.done_steps_count = 0
+        st.rerun()
 
 # Отображение плана
 st.sidebar.subheader("📋 Research Plan")
+
 plan_container = st.sidebar.empty()
 
 def render_plan():
@@ -137,9 +146,13 @@ if not approvals.empty:
             c.close()
             st.rerun()
         if c2.button("❌ Deny", key=f"n_{row['command_hash']}"):
-            # Можно добавить логику удаления или пометки rejected
-            logger.info("Denied terminal command (no-op): hash=%s", row["command_hash"])
-            pass
+            logger.info("Denied terminal command: hash=%s", row["command_hash"])
+            c = sqlite3.connect(DB_NAME)
+            # Use -1 as a sentinel for denied (SQLite doesn't enforce BOOLEAN strictly)
+            c.execute("UPDATE approvals SET approved=-1 WHERE command_hash=?", (row['command_hash'],))
+            c.commit()
+            c.close()
+            st.rerun()
 else:
     st.sidebar.success("No pending actions")
 
@@ -147,157 +160,87 @@ else:
 st.title("🧠 Deep Research Agent Swarm")
 
 # Рендер истории
+# Always load fresh messages from DB to stay in sync with background runner
+st.session_state.messages = database.load_messages()
+
 for msg in st.session_state.messages:
-    if msg["role"] == "system": continue # Скрываем системные напоминалки
+    # Defensive: ignore malformed rows (older runs could have role=None).
+    if msg.get("role") is None:
+        continue
+    if msg["role"] == "system":
+        if msg["content"] and ("Error" in msg["content"] or "failed" in msg.get("content", "").lower()):
+            with st.chat_message("assistant", avatar="🚨"):
+                st.error(msg["content"])
+        continue 
     if msg["role"] == "tool": continue   # Скрываем результаты инструментов (промежуточные)
     
-    with st.chat_message(msg["role"]):
-        st.markdown(msg["content"] or "") # Handle None content
+    # Пропускаем только пустые или чисто технические сообщения ассистента без вызовов инструментов
+    content = (msg.get("content") or "").strip()
+    tool_calls = msg.get("tool_calls")
+    
+    if msg["role"] == "assistant" and not tool_calls and (not content or content in ("{}", "None", "[]")):
+        continue
+    
+    # Streamlit chat_message signature treats the first positional arg as "name".
+    # We keep styling by using only "user"/"assistant" as the chat name, and
+    # display custom senders (Planner/Executor/...) inside the message body.
+    role = msg["role"] if msg["role"] in ("user", "assistant") else "assistant"
+    sender = (msg.get("sender") or "").strip() if role == "assistant" else ""
+    content = msg.get("content") or ""
+
+    with st.chat_message(role):
+        if sender:
+            st.markdown(f"**{sender}**")
+        st.markdown(content)
+
+# --- Logic for Running Swarm ---
+def start_swarm(prompt: str, start_agent_name="Planner"):
+    # ОПРЕДЕЛЕНИЕ НАЧАЛЬНОГО АГЕНТА
+    plan_df = database.get_all_plan()
+    
+    if start_agent_name == "Planner":
+         start_agent = planner_agent
+    elif start_agent_name == "Executor":
+         start_agent = executor_agent
+    else:
+         start_agent = planner_agent if plan_df.empty else executor_agent
+
+    logger.info("Starting swarm via runner: agent=%s", start_agent.name)
+    # Передаем MAX_TURNS из конфига в раннер
+    runner.run_in_background(start_agent, input_text=prompt, max_turns=MAX_TURNS)
+    st.rerun()
+
+# --- Observer Loop (if swarm is running) ---
+if database.is_swarm_running():
+    with st.status("🚀 Swarm is active...", expanded=True) as status:
+        st.write("Agents are performing research steps...")
+        # Polling loop
+        last_msg_count = len(st.session_state.messages)
+        while database.is_swarm_running():
+            time.sleep(2)
+            # Check for new messages to trigger UI refresh
+            current_messages = database.load_messages()
+            if len(current_messages) > last_msg_count:
+                st.rerun()
+            
+        # Проверяем на ошибки перед финальным рендером
+        final_messages = database.load_messages()
+        has_error = any("Error" in (m.get("content") or "") for m in final_messages if m["role"] == "system")
+        
+        if has_error:
+            status.update(label="Swarm execution failed", state="error", expanded=True)
+        else:
+            status.update(label="Swarm finished!", state="complete", expanded=False)
+        
+        time.sleep(1)
+        st.rerun()
 
 # Обработка ввода
-if prompt := st.chat_input("Input research topic..."):
-    # Добавляем в UI
+if prompt := st.chat_input("Input research topic...", disabled=database.is_swarm_running()):
     logger.info("User prompt received: chars=%s", len(prompt))
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    database.save_message("user", prompt)
+    # We do NOT save to DB here; Runner will save it via session.add_items
     
-    with st.chat_message("user"):
-        st.markdown(prompt)
-
-    with st.spinner("Swarm Agents are working..."):
-        try:
-            # ОПРЕДЕЛЕНИЕ НАЧАЛЬНОГО АГЕНТА
-            # Если план пуст - зовем Planner. Если план есть - Executor.
-            plan_df = database.get_all_plan()
-            start_agent = planner_agent if plan_df.empty else executor_agent
-            logger.info(
-                "Starting Swarm run: start_agent=%s messages=%s max_turns=%s",
-                getattr(start_agent, "name", str(start_agent)),
-                len(st.session_state.messages),
-                MAX_TURNS,
-            )
-
-            # ЗАПУСК SWARM
-            # Мы отключаем debug-режим Swarm (debug=False), чтобы не засорять логи 
-            # полным выводом результатов инструментов. 
-            # Логирование вызовов и аргументов (INFO) осталось в tools.py.
-            response = client.run(
-                agent=start_agent,
-                messages=st.session_state.messages,
-                context_variables={},
-                max_turns=MAX_TURNS,
-                debug=False,
-            )
-
-            # Обработка ответа
-            # Сохраняем ТОЛЬКО НОВЫЕ сообщения в БД
-            new_messages = response.messages[len(st.session_state.messages):]
-            for m in new_messages:
-                database.save_message(
-                    role=m["role"], 
-                    content=m.get("content"), 
-                    tool_calls=m.get("tool_calls"), 
-                    sender=m.get("sender")
-                )
-            
-            st.session_state.messages.extend(new_messages)
-            logger.info("Swarm run finished: new_messages=%s", len(new_messages))
-            
-            last_msg = response.messages[-1]
-            try:
-                last_sender = last_msg.get("sender") or last_msg.get("role")
-                last_content = last_msg.get("content") or ""
-                last_tool_calls = last_msg.get("tool_calls")
-                logger.debug(
-                    "Swarm last message: sender=%s tool_calls=%s content_preview=%s",
-                    last_sender,
-                    bool(last_tool_calls),
-                    _safe_preview(last_content),
-                )
-            except Exception:
-                logger.debug("Swarm last message: (failed to introspect)")
-
-            with st.chat_message("assistant"):
-                if last_msg.get("content"):
-                    st.markdown(last_msg["content"])
-                else:
-                    # Если контента нет (только тулы), можно ничего не выводить или показать спиннер
-                    # Но так как это "финальный" ответ цикла, лучше что-то показать, если это не просто тул
-                    pass
-
-            # --- Fallback: if Planner didn't emit tool calls, try to parse and persist plan ourselves ---
-            if start_agent is planner_agent:
-                plan_df_after = database.get_all_plan()
-                if plan_df_after.empty:
-                    # Если план не создан через тулы, считаем что что-то пошло не так
-                    logger.warning("Planner did not create a plan via tools.")
-                    st.warning("Planner не создал план. Попробуйте уточнить запрос.")
-            
-            # Обновляем план в сайдбаре после выполнения (чтобы видеть новые шаги/статусы)
-            render_plan()
-
-        except json.JSONDecodeError as e:
-            logger.error("Model output malformed JSON (usually in tool calls): %s", e)
-            st.error(
-                "🛑 **Model Error**: The model generated invalid JSON arguments for a tool call.\n"
-                "This happens with smaller models (like gpt-oss-20b). Try restarting the step or clearing history."
-            )
-            st.stop()
-        except openai.APIConnectionError as e:
-            logger.error("Connection Error: %s", e)
-            st.error(f"🔌 **Connection Error**: Failed to connect to LLM provider.\n\nDetails: {e}")
-            st.stop()
-        except Exception as e:
-            logger.exception("Swarm run failed")
-            st.error(f"Swarm run failed: {e}")
-            st.stop()
-            
-        # --- ЛОГИКА "STATE OVER HISTORY" (Очистка памяти) ---
-        current_done_count = database.get_completed_steps_count()
-        logger.debug(
-            "Completed steps count: current=%s previous=%s",
-            current_done_count,
-            st.session_state.done_steps_count,
-        )
-        
-        # Если количество выполненных шагов увеличилось
-        if current_done_count > st.session_state.done_steps_count:
-            st.session_state.done_steps_count = current_done_count
-            
-            # Очищаем messages, чтобы не переполнять контекст
-            # Агенты восстановят знания через tools.get_completed_research_context
-            # NOTE: Мы также удаляем историю из БД?
-            # Если мы очищаем st.session_state.messages, мы теряем контекст для модели.
-            # Если мы хотим сохранить "визуальную" историю, но очистить контекст модели:
-            # Swarm берет messages из аргумента.
-            # Текущая логика: st.session_state.messages = [] -> полная очистка контекста.
-            
-            # ВАЖНО: При persistence мы должны решить, удалять ли из БД.
-            # Логика "Memory cleared" подразумевает, что модель "забывает".
-            # Чтобы поддержать это, мы можем удалить старые сообщения из БД или просто пометить их архивированными.
-            # Для простоты MVP: удаляем из БД (или просто загружаем пустой список в session_state, но при перезагрузке они вернутся из БД).
-            # Правильно: Удалить из messages таблицы (или иметь session_id, но у нас одна сессия).
-            # Давайте очистим таблицу messages, но оставим системное сообщение.
-            
-            logger.info("Step completed -> memory cleared; done_steps_count=%s", current_done_count)
-            
-            # 1. Clear in-memory
-            st.session_state.messages = []
-            
-            # 2. Clear DB messages (simulating context window reset)
-            conn = sqlite3.connect(DB_NAME)
-            conn.execute("DELETE FROM messages")
-            conn.commit()
-            conn.close()
-            
-            st.toast("✅ Step completed! Memory cleared.", icon="🧹")
-            
-            # Добавляем невидимый системный пинок
-            system_msg = "PREVIOUS STEP DONE. Memory cleared. Use `get_current_plan_step` to continue."
-            st.session_state.messages.append({
-                "role": "system",
-                "content": system_msg
-            })
-            database.save_message("system", system_msg)
-            
-    st.rerun()
+    # Determine start agent
+    plan_df = database.get_all_plan()
+    start_agent_name = "Planner" if plan_df.empty else "Executor"
+    start_swarm(prompt=prompt, start_agent_name=start_agent_name)
