@@ -42,21 +42,23 @@ def transfer_to_planner():
 planner_agent = Agent(
     name="Planner",
     model=MODEL,
-    instructions="""You are the Lead Planner. 
-Your goal is ONLY to create a research plan and then IMMEDIATELY hand off control.
+    instructions="""You are the Lead Planner.
+Your goal is ONLY to create a research plan and then hand off control.
 
-1. Create 3-5 tasks using `add_steps_to_plan`.
-2. Hand off control to the Executor using `transfer_to_executor`.
+FLOW:
+1. FIRST, call `add_steps_to_plan` with 3-5 research tasks.
+2. WAIT for the tool to execute.
+3. THEN, call `transfer_to_executor` to start research.
 
-IMPORTANT:
-- You must perform BOTH tool calls in the same turn.
-- Your response MUST consist ONLY of tool calls.
-- Do NOT output any JSON text or thoughts outside of tool calls.
+RULES:
+- DO NOT output the plan as text or JSON.
+- DO NOT speak to the user.
+- ONLY use tool calls.
 """,
     tools=[tools.add_steps_to_plan, transfer_to_executor],
     handoffs=[transfer_to_executor],
     model_settings=ModelSettings(
-        parallel_tool_calls=True, # Enable to allow plan + handoff in one go
+        parallel_tool_calls=False,
         tool_choice="required"
     )
 )
@@ -88,7 +90,7 @@ RULES:
     ],
     handoffs=[transfer_to_evaluator, transfer_to_reporter],
     model_settings=ModelSettings(
-        parallel_tool_calls=True,
+        parallel_tool_calls=False,
         tool_choice="auto"
     )
 )
@@ -99,8 +101,10 @@ evaluator_agent = Agent(
     model=MODEL,
     instructions="""You are the QA Evaluator.
 
-1. If the research data is valid, call `submit_step_result` and then MUST hand off control back to the Executor for the next step using `transfer_to_executor`.
-2. If the data is bad, call `mark_step_failed` and hand off control to the Strategist using `transfer_to_strategist`.
+1. If the research data is valid, FIRST call `submit_step_result`.
+2. AFTER the result is submitted, call `transfer_to_executor` to hand off control.
+3. If the data is bad, FIRST call `mark_step_failed`.
+4. AFTER marking failed, call `transfer_to_strategist`.
 
 RULES:
 - You must ALWAYS call a handoff tool after making your decision.
@@ -114,7 +118,7 @@ RULES:
         transfer_to_strategist
     ],
     handoffs=[transfer_to_executor, transfer_to_strategist],
-    model_settings=ModelSettings(parallel_tool_calls=True)
+    model_settings=ModelSettings(parallel_tool_calls=False)
 )
 
 # 4. STRATEGIST
@@ -124,7 +128,7 @@ strategist_agent = Agent(
     instructions="""You are the Strategist.
 
 1. Analyze why a step failed and update the plan using `add_steps_to_plan`.
-2. After updating the plan, hand off control back to the Executor using `transfer_to_executor`.
+2. AFTER the plan is updated, call `transfer_to_executor`.
 
 RULES:
 - NEVER respond with plain text summarizing your plan changes.
@@ -132,7 +136,7 @@ RULES:
 """,
     tools=[tools.add_steps_to_plan, transfer_to_executor],
     handoffs=[transfer_to_executor],
-    model_settings=ModelSettings(parallel_tool_calls=True)
+    model_settings=ModelSettings(parallel_tool_calls=False)
 )
 
 # 5. REPORTER
@@ -146,5 +150,8 @@ reporter_agent = Agent(
 3. Output the report text directly in the chat.
 """,
     tools=[tools.get_completed_research_context],
-    model_settings=ModelSettings(tool_choice="auto")
+    model_settings=ModelSettings(
+        parallel_tool_calls=False,
+        tool_choice="auto"
+    )
 )
