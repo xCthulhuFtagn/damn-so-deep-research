@@ -31,10 +31,16 @@ class DBSession(Session):
 
     async def get_items(self, limit: int | None = None) -> List[dict]:
         """Retrieve conversation history."""
-        messages = database.load_messages()
+        # --- MODIFIED: Use Minimal Context Window ---
+        # Instead of load_messages() which gets EVERYTHING, we use load_agent_window(10)
+        messages = database.load_agent_window(limit=10)
         
         cleaned = []
-        for m in messages:
+        # Inject Synthetic System Message after the first message (User Prompt)
+        # to remind the agent of the CURRENT TASK strictly.
+        injected_context = False
+        
+        for i, m in enumerate(messages):
             role = m["role"]
             content = m["content"] or ""
             
@@ -45,6 +51,16 @@ class DBSession(Session):
                     "content": content,
                     "name": m.get("sender"),
                 })
+                
+                # INJECTION POINT: Immediately after the very first User message (the prompt)
+                if not injected_context and role == "user":
+                    active_task = database.get_active_step_description()
+                    cleaned.append({
+                        "role": "system",
+                        "content": f"CURRENT FOCUS TASK: {active_task}\n(Focus ONLY on this task. Ignore past steps.)",
+                        "name": "System_Context"
+                    })
+                    injected_context = True
             
             # 2. Assistant
             elif role == "assistant":

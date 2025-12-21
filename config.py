@@ -19,6 +19,9 @@ MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
 # Инфраструктура
 DB_NAME = os.getenv("DB_NAME", "research_state.db")
 MAX_TURNS = int(os.getenv("MAX_TURNS", 25))
+# Количество повторных попыток при сбоях модели
+MAX_RETRIES = int(os.getenv("MAX_RETRIES", 3))
+
 # Путь к базе данных
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = str(BASE_DIR / DB_NAME)

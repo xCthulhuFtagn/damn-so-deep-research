@@ -49,6 +49,7 @@ CRITICAL RULES:
 2. Call EXACTLY ONE tool per turn. Never call multiple tools simultaneously.
 3. Available tools: get_current_plan_step, get_completed_research_context, web_search, read_file, execute_terminal_command
 4. RESTRICTION: Do NOT use `read_file` unless the task explicitly asks to read a specific local file. Default to `web_search`.
+5. You MUST call a tool every turn. Never finish without a tool call.
 
 WORKFLOW:
 1. ALWAYS start by calling `get_current_plan_step` (no arguments) to see your task. Do this IMMEDIATELY upon receiving control.
@@ -68,7 +69,7 @@ FORBIDDEN: Never call multiple tools at once. Never output text. Never add suffi
     handoffs=[handoff(reporter_agent)], # Evaluator added later
     model_settings=ModelSettings(
         parallel_tool_calls=False,
-        tool_choice="auto"
+        tool_choice="required"
     )
 )
 
@@ -95,7 +96,7 @@ Available tools: add_steps_to_plan
 """,
     tools=[tools.add_steps_to_plan],
     handoffs=[handoff(executor_agent)],
-    model_settings=ModelSettings(parallel_tool_calls=False)
+    model_settings=ModelSettings(parallel_tool_calls=False, tool_choice="required")
 )
 
 # 4. EVALUATOR (Depends on Executor, Strategist)
@@ -109,6 +110,7 @@ CRITICAL RULES:
 1. Use EXACT tool names without any suffixes or special characters.
 2. Call EXACTLY ONE tool per turn.
 3. Available tools: get_current_plan_step, submit_step_result, mark_step_failed
+4. You MUST call one of the allowed tools each turn. Never finish without a tool call.
 
 WORKFLOW:
 FIRST TURN:
@@ -129,7 +131,7 @@ FORBIDDEN: Never call multiple tools at once. Never output text. Never add suffi
         tools.mark_step_failed,
     ],
     handoffs=[handoff(executor_agent), handoff(strategist_agent)],
-    model_settings=ModelSettings(parallel_tool_calls=False)
+    model_settings=ModelSettings(parallel_tool_calls=False, tool_choice="required")
 )
 
 # 5. PLANNER (Depends on Executor)
@@ -169,3 +171,22 @@ FORBIDDEN: Do NOT add commentary, suffixes like <|channel|>, or any text output.
 # --- Post-Init Updates ---
 # Close the circular dependency loop for Executor -> Evaluator
 executor_agent.handoffs.append(handoff(evaluator_agent))
+
+# --- Helper: resolve agent by name (for recovery logic) ---
+_AGENT_MAP = {
+    "Planner": planner_agent,
+    "Executor": executor_agent,
+    "Evaluator": evaluator_agent,
+    "Reporter": reporter_agent,
+    "Strategist": strategist_agent,
+}
+
+
+def get_agent_by_name(name: str):
+    """
+    Resolve agent object by its name (as stored in DB sender field or error text).
+    Returns None if not found.
+    """
+    if not name:
+        return None
+    return _AGENT_MAP.get(name)

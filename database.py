@@ -245,6 +245,82 @@ def load_messages():
     logger.debug("DB load_messages: count=%s", len(messages))
     return messages
 
+def get_active_step_description() -> str:
+    """Returns the description of the current active step."""
+    conn = sqlite3.connect(DB_PATH)
+    # Get the IN_PROGRESS step, or the first TODO step
+    df = pd.read_sql_query("SELECT description FROM plan WHERE status IN ('IN_PROGRESS', 'TODO') ORDER BY status ASC, step_number ASC LIMIT 1", conn)
+    conn.close()
+    
+    if not df.empty:
+        return str(df.iloc[0]['description'])
+    return "No active research step found. Waiting for plan."
+
+def load_agent_window(limit: int = 10):
+    """
+    Loads a minimal context window:
+    1. The FIRST message (User Prompt)
+    2. The LAST N messages (Recent conversation history)
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    # 1. Get First Message (ID=1 usually, or just LIMIT 1)
+    c.execute("SELECT role, content, tool_calls, tool_call_id, sender FROM messages ORDER BY id ASC LIMIT 1")
+    first_row = c.fetchall()
+    
+    # 2. Get Last N Messages
+    # We use a subquery to order by ID desc first to get the last N, then re-order ASC
+    c.execute(f'''
+        SELECT role, content, tool_calls, tool_call_id, sender 
+        FROM (
+            SELECT role, content, tool_calls, tool_call_id, sender, id
+            FROM messages 
+            ORDER BY id DESC 
+            LIMIT ?
+        ) 
+        ORDER BY id ASC
+    ''', (limit,))
+    last_rows = c.fetchall()
+    
+    conn.close()
+    
+    # Combine and Deduplicate (if total messages < limit)
+    # We'll use a set of signatures (role+content+sender) or just handle list logic carefully
+    
+    all_rows = []
+    if first_row:
+        all_rows.extend(first_row)
+    
+    # If first_row is also in last_rows (short history), avoid duplicating
+    # Simple check: if len(last_rows) < limit, likely overlap might happen if total is small.
+    # But strictly speaking, if we just blindly append, we might duplicate the first message if it's also in the last N.
+    # Let's simple check:
+    
+    for r in last_rows:
+        if first_row and r == first_row[0]:
+            continue # Skip if it's the exact same row content as the first one
+        all_rows.append(r)
+        
+    messages = []
+    for row in all_rows:
+        role, content, tool_calls_json, tool_call_id, sender = row
+        msg = {
+            "role": role,
+            "content": content,
+            "sender": sender,
+            "tool_call_id": tool_call_id
+        }
+        if tool_calls_json:
+            try:
+                msg["tool_calls"] = json.loads(tool_calls_json)
+            except:
+                pass
+        messages.append(msg)
+        
+    logger.debug("DB load_agent_window: count=%s", len(messages))
+    return messages
+
 def clear_messages():
     """Clears all messages from the database."""
     conn = sqlite3.connect(DB_PATH)
