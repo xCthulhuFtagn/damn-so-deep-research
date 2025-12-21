@@ -127,6 +127,14 @@ def execute_terminal_command(command: str) -> str:
 # --- Database / Context Tools ---
 
 @function_tool
+def answer_from_knowledge(answer: str) -> str:
+    """
+    Эхо-инструмент: принимает сгенерированный текст ответа и возвращает его как есть,
+    чтобы зафиксировать ответ через tool_call.
+    """
+    return answer
+
+@function_tool
 def add_steps_to_plan(steps: List[str]) -> str:
     """
     Добавляет новые задачи в план исследования.

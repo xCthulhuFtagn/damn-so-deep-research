@@ -31,82 +31,37 @@ class DBSession(Session):
 
     async def get_items(self, limit: int | None = None) -> List[dict]:
         """Retrieve conversation history."""
-        # --- MODIFIED: Use Minimal Context Window ---
-        # Instead of load_messages() which gets EVERYTHING, we use load_agent_window(10)
-        messages = database.load_agent_window(limit=10)
-        
+        # Reporter-specific context: original user prompt + successful tool outputs grouped by step
         cleaned = []
-        # Inject Synthetic System Message after the first message (User Prompt)
-        # to remind the agent of the CURRENT TASK strictly.
-        injected_context = False
-        
-        for i, m in enumerate(messages):
-            role = m["role"]
-            content = m["content"] or ""
-            
-            # 1. User/System/Developer
-            if role in ("user", "system", "developer"):
-                cleaned.append({
-                    "role": role,
-                    "content": content,
-                    "name": m.get("sender"),
-                })
-                
-                # INJECTION POINT: Immediately after the very first User message (the prompt)
-                if not injected_context and role == "user":
-                    active_task = database.get_active_step_description()
-                    cleaned.append({
-                        "role": "system",
-                        "content": f"CURRENT FOCUS TASK: {active_task}\n(Focus ONLY on this task. Ignore past steps.)",
-                        "name": "System_Context"
-                    })
-                    injected_context = True
-            
-            # 2. Assistant
-            elif role == "assistant":
-                # To ensure content and tool calls are merged into one message by the Converter,
-                # we must use the internal 'ResponseOutputMessage' structure for content,
-                # followed by 'function_call' items.
-                
-                # Emit content if present
-                if content:
-                    cleaned.append({
-                        "type": "message",
-                        "role": "assistant",
-                        "content": [{
-                            "type": "output_text",
-                            "text": content
-                        }],
-                        "name": m.get("sender"),
-                    })
-                
-                # Emit tool calls as separate items
-                if m.get("tool_calls"):
-                    for tc in m["tool_calls"]:
-                        # Handle both dict and object (though DB load should give dicts)
-                        if isinstance(tc, dict):
-                            fn = tc.get("function", {})
-                            cleaned.append({
-                                "type": "function_call",
-                                "name": fn.get("name"),
-                                "arguments": fn.get("arguments"),
-                                "call_id": tc.get("id"),
-                                "name": m.get("sender"), # Assign sender to tool call too if needed
-                            })
-                        else:
-                            # Fallback if somehow not a dict (shouldn't happen with updated load_messages)
-                            pass
 
-            # 3. Tool Outputs
-            elif role == "tool":
+        # 1) Original user prompt
+        user_prompt = database.get_initial_user_prompt()
+        if user_prompt:
+            cleaned.append({
+                "role": "user",
+                "content": user_prompt,
+                "name": None,
+            })
+
+        # 2) Successful tool outputs grouped by step
+        step_blocks = database.build_step_blocks_from_tools()
+        for block in step_blocks:
+            step_num = block.get("step_number")
+            goal = block.get("goal") or ""
+            cleaned.append({
+                "role": "assistant",
+                "content": f"Шаг {step_num} — цель: {goal}",
+                "name": "Executor"
+            })
+            for res in block.get("tool_results", []):
+                tool_name = res.get("tool") or "tool"
+                output = res.get("output") or ""
                 cleaned.append({
-                    "type": "function_call_output",
-                    "call_id": m.get("tool_call_id"),
-                    "output": content,
-                    # Restore sender/name as it might be required by some backends or SDK logic
-                    "name": m.get("sender"),
+                    "role": "assistant",
+                    "content": f"[{tool_name}] {output}",
+                    "name": "Executor"
                 })
-                
+
         if limit is not None:
             return cleaned[-limit:]
         return cleaned

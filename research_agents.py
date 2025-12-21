@@ -47,7 +47,7 @@ You are the Executor. Your goal is to perform research steps.
 CRITICAL RULES:
 1. Use EXACT tool names without any suffixes or special characters.
 2. Call EXACTLY ONE tool per turn. Never call multiple tools simultaneously.
-3. Available tools: get_current_plan_step, get_completed_research_context, web_search, read_file, execute_terminal_command
+3. Available tools: get_current_plan_step, web_search, read_file, execute_terminal_command, answer_from_knowledge
 4. RESTRICTION: Do NOT use `read_file` unless the task explicitly asks to read a specific local file. Default to `web_search`.
 5. You MUST call a tool every turn. Never finish without a tool call.
 
@@ -61,10 +61,10 @@ FORBIDDEN: Never call multiple tools at once. Never output text. Never add suffi
 """,
     tools=[
         tools.get_current_plan_step,
-        tools.get_completed_research_context,
         tools.web_search,
         tools.read_file,
         tools.execute_terminal_command,
+        tools.answer_from_knowledge,
     ],
     handoffs=[handoff(reporter_agent)], # Evaluator added later
     model_settings=ModelSettings(

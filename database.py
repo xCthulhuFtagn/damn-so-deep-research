@@ -374,3 +374,114 @@ def prune_messages_for_ui():
     conn.commit()
     conn.close()
     logger.debug("DB prune_messages_for_ui done")
+
+
+def get_initial_user_prompt() -> str | None:
+    """Returns the first user message content, if any."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        "SELECT content FROM messages WHERE role='user' ORDER BY id ASC LIMIT 1"
+    )
+    row = c.fetchone()
+    conn.close()
+    if row and row[0]:
+        return str(row[0])
+    return None
+
+
+def load_successful_tool_outputs(executor_tools: set[str] = None) -> list[dict]:
+    """
+    Returns tool outputs that look successful (non-empty content, no obvious error markers).
+    executor_tools: optional set of tool names to whitelist; if None, accepts any tool.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT role, content, tool_calls, tool_call_id, sender FROM messages ORDER BY id")
+    rows = c.fetchall()
+    conn.close()
+
+    msgs = []
+    for row in rows:
+        role, content, tool_calls_json, tool_call_id, sender = row
+        if role != "tool":
+            continue
+        if not content:
+            continue
+        # basic error markers
+        text = (content or "").lower()
+        if "error" in text or "invalid" in text or "denied" in text:
+            continue
+        tool_name = None
+        if tool_calls_json:
+            try:
+                tc_list = json.loads(tool_calls_json)
+                if isinstance(tc_list, list) and tc_list:
+                    fn = tc_list[0].get("function", {})
+                    tool_name = fn.get("name")
+            except Exception:
+                pass
+        if executor_tools and tool_name and tool_name not in executor_tools:
+            continue
+        msgs.append({
+            "role": role,
+            "content": content,
+            "tool_call_id": tool_call_id,
+            "sender": sender,
+            "tool_name": tool_name,
+        })
+    return msgs
+
+
+def build_step_blocks_from_tools() -> list[dict]:
+    """
+    Returns a list of step blocks with structure:
+    {
+      "step_number": int,
+      "goal": str,
+      "tool_results": [ { "tool": name, "output": str } ... ]
+    }
+    Only includes steps marked DONE/IN_PROGRESS/TODO (goal from plan.description),
+    and tool outputs from successful tool calls.
+    """
+    # Map step_id -> (step_number, description)
+    plan_df = get_all_plan()
+    step_map = {}
+    if plan_df is not None and not plan_df.empty:
+        for _, row in plan_df.iterrows():
+            step_map[row["id"]] = {
+                "step_number": row["step_number"],
+                "description": row["description"],
+            }
+
+    tool_msgs = load_successful_tool_outputs(
+        executor_tools={"web_search", "read_file", "execute_terminal_command", "answer_from_knowledge"}
+    )
+
+    # We don’t store step_id in tool rows; infer from last get_current_plan_step before the tool?
+    # As a fallback, group all tools into one list; we can’t reliably map to step_id without schema.
+    # So we produce a single synthetic step “Unknown/Current” if mapping fails.
+    # If step_map is present, just attach all tools under the highest IN_PROGRESS or DONE.
+
+    blocks = []
+    # choose active step if exists
+    active = get_next_step()
+    active_id = active["id"] if active is not None else None
+    active_step_number = active["step_number"] if active is not None else None
+    active_desc = active["description"] if active is not None else "Current active task"
+
+    # Group all tool outputs into a single block for now (schema lacks step_id link)
+    if tool_msgs:
+        block = {
+            "step_number": active_step_number or "N/A",
+            "goal": active_desc,
+            "tool_results": [],
+        }
+        for tm in tool_msgs:
+            block["tool_results"].append({
+                "tool": tm.get("tool_name") or "tool",
+                "output": tm.get("content") or "",
+            })
+        blocks.append(block)
+
+    return blocks

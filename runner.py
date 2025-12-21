@@ -95,12 +95,12 @@ class SwarmRunner:
                     # treat as abnormal completion and retry with feedback (if retries remain).
                     try:
                         plan_df = database.get_all_plan()
-                        pending = plan_df[plan_df["status"].isin(["TODO", "IN_PROGRESS"])]
+                        pending_df = plan_df[plan_df["status"].isin(["TODO", "IN_PROGRESS"])]
                     except Exception as err:
-                        pending = []
+                        pending_df = None
                         logger.warning("Post-run guard: failed to load plan status: %s", err)
 
-                    if pending and final_len < 5 and retry_count < MAX_RETRIES:
+                    if pending_df is not None and not pending_df.empty and final_len < 5 and retry_count < MAX_RETRIES:
                         retry_count += 1
                         feedback = (
                             "SYSTEM FEEDBACK: No tool was called or output was empty while tasks remain. "
