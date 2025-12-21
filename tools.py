@@ -48,6 +48,9 @@ def read_file(file_path: str) -> str:
             content = f.read()
             logger.debug("read_file: ok chars=%s", len(content))
             return content
+    except FileNotFoundError:
+        logger.warning("read_file: FileNotFoundError path=%s", file_path)
+        return f"Error: File '{file_path}' not found. Verify the path or use other tools to find the correct file."
     except Exception as e:
         logger.exception("read_file failed: path=%s", file_path)
         return f"Error reading file: {e}"

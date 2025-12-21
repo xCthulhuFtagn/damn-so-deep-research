@@ -1,83 +1,61 @@
 import logging
 from config import MODEL, OPENAI_API_KEY, OPENAI_BASE_URL
 from logging_setup import setup_logging
-from agents import Agent, function_tool, ModelSettings
+from agents import Agent, handoff, ModelSettings
+from agents.extensions.handoff_prompt import RECOMMENDED_PROMPT_PREFIX
 import tools
 
 setup_logging()
 logger = logging.getLogger(__name__)
 
-# --- Handoff Functions ---
-# We define them as tools that return the target Agent.
-# We must use lazy lookup or rely on Python's late binding for the return values.
-
-@function_tool(name_override="transfer_to_executor")
-def transfer_to_executor():
-    """Hand off control to the Executor agent."""
-    return executor_agent
-
-@function_tool(name_override="transfer_to_evaluator")
-def transfer_to_evaluator():
-    """Hand off control to the Evaluator agent."""
-    return evaluator_agent
-
-@function_tool(name_override="transfer_to_strategist")
-def transfer_to_strategist():
-    """Hand off control to the Strategist agent."""
-    return strategist_agent
-
-@function_tool(name_override="transfer_to_reporter")
-def transfer_to_reporter():
-    """Hand off control to the Reporter agent."""
-    return reporter_agent
-
-@function_tool(name_override="transfer_to_planner")
-def transfer_to_planner():
-    """Hand off control to the Planner agent."""
-    return planner_agent
-
 # --- Agent Definitions ---
+# Defined in topological order (mostly) to allow constructor handoffs.
 
-# 1. PLANNER
-planner_agent = Agent(
-    name="Planner",
+# 1. REPORTER (No dependencies)
+reporter_agent = Agent(
+    name="Reporter",
     model=MODEL,
-    instructions="""You are the Lead Planner.
-Your goal is ONLY to create a research plan and then hand off control.
+    instructions=f"""{RECOMMENDED_PROMPT_PREFIX}
+You are the Reporter. Your goal is to create the final research summary.
 
-FLOW:
-1. FIRST, call `add_steps_to_plan` with 3-5 research tasks.
-2. WAIT for the tool to execute.
-3. THEN, call `transfer_to_executor` to start research.
+CRITICAL RULES:
+1. Use EXACT tool names without any suffixes or special characters.
+2. Available tools: get_completed_research_context
 
-RULES:
-- DO NOT output the plan as text or JSON.
-- DO NOT speak to the user.
-- ONLY use tool calls.
+WORKFLOW:
+1. First turn: Call `get_completed_research_context` (exact name, no arguments).
+2. Second turn: Write a comprehensive Markdown report based on the findings.
+3. Output the report text directly in the chat (this is the ONLY agent that should output text).
+
+FORBIDDEN: Never add suffixes like <|channel|> to tool names.
 """,
-    tools=[tools.add_steps_to_plan, transfer_to_executor],
-    handoffs=[transfer_to_executor],
+    tools=[tools.get_completed_research_context],
+    handoffs=[],
     model_settings=ModelSettings(
         parallel_tool_calls=False,
-        tool_choice="required"
+        tool_choice="auto"
     )
 )
 
-# 2. EXECUTOR
+# 2. EXECUTOR (Depends on Evaluator, Reporter. Evaluator not ready yet.)
 executor_agent = Agent(
     name="Executor",
     model=MODEL,
-    instructions="""You are the Executor. Your goal is to perform research steps.
+    instructions=f"""{RECOMMENDED_PROMPT_PREFIX}
+You are the Executor. Your goal is to perform research steps.
 
-FLOW:
-1. Call `get_current_plan_step` to see your task.
-2. If all steps are done, hand off control to the Reporter.
-3. Use research tools to find information.
-4. After gathering findings, IMMEDIATELY call `transfer_to_evaluator`.
+CRITICAL RULES:
+1. Use EXACT tool names without any suffixes or special characters.
+2. Call EXACTLY ONE tool per turn. Never call multiple tools simultaneously.
+3. Available tools: get_current_plan_step, get_completed_research_context, web_search, read_file, execute_terminal_command
 
-RULES:
-- Your response must be ONLY a tool call.
-- Do not add any thoughts, comments, or text.
+WORKFLOW:
+1. ALWAYS start by calling `get_current_plan_step` (no arguments) to see your task. Do this IMMEDIATELY upon receiving control.
+2. If it returns "NO_MORE_STEPS", hand off to Reporter.
+3. Otherwise, use ONE research tool (web_search/read_file/execute_terminal_command) to gather information.
+4. After gathering enough information, hand off to Evaluator.
+
+FORBIDDEN: Never call multiple tools at once. Never output text. Never add suffixes like <|channel|>.
 """,
     tools=[
         tools.get_current_plan_step,
@@ -85,73 +63,110 @@ RULES:
         tools.web_search,
         tools.read_file,
         tools.execute_terminal_command,
-        transfer_to_evaluator,
-        transfer_to_reporter
     ],
-    handoffs=[transfer_to_evaluator, transfer_to_reporter],
+    handoffs=[handoff(reporter_agent)], # Evaluator added later
     model_settings=ModelSettings(
         parallel_tool_calls=False,
         tool_choice="auto"
     )
 )
 
-# 3. EVALUATOR
+# 3. STRATEGIST (Depends on Executor)
+strategist_agent = Agent(
+    name="Strategist",
+    model=MODEL,
+    instructions=f"""{RECOMMENDED_PROMPT_PREFIX}
+You are the Strategist. You create recovery plans when steps fail.
+
+CRITICAL RULES:
+1. Use EXACT tool names without any suffixes or special characters.
+2. Call EXACTLY ONE tool per turn.
+3. Available tools: add_steps_to_plan
+
+WORKFLOW:
+FIRST TURN:
+- Call `add_steps_to_plan` with a list of corrective tasks.
+- Each task must be a numbered string like "1. Do this"
+- Do NOT call other tools in the same turn.
+
+SECOND TURN (after plan is updated):
+- Hand off to Executor.
+- Do NOT call other tools.
+
+FORBIDDEN: Never call multiple tools at once. Never output text. Never add suffixes like <|channel|>.
+""",
+    tools=[tools.add_steps_to_plan],
+    handoffs=[handoff(executor_agent)],
+    model_settings=ModelSettings(parallel_tool_calls=False)
+)
+
+# 4. EVALUATOR (Depends on Executor, Strategist)
 evaluator_agent = Agent(
     name="Evaluator",
     model=MODEL,
-    instructions="""You are the QA Evaluator.
+    instructions=f"""{RECOMMENDED_PROMPT_PREFIX}
+You are the QA Evaluator. You validate research findings.
 
-1. If the research data is valid, FIRST call `submit_step_result`.
-2. AFTER the result is submitted, call `transfer_to_executor` to hand off control.
-3. If the data is bad, FIRST call `mark_step_failed`.
-4. AFTER marking failed, call `transfer_to_strategist`.
+CRITICAL RULES:
+1. Use EXACT tool names without any suffixes or special characters.
+2. Call EXACTLY ONE tool per turn.
+3. Available tools: get_current_plan_step, submit_step_result, mark_step_failed
 
-RULES:
-- You must ALWAYS call a handoff tool after making your decision.
-- NEVER respond with plain text alone.
+WORKFLOW:
+FIRST TURN:
+- If research data is good: call `submit_step_result` with step_id and result_text.
+- If data is bad: call `mark_step_failed` with step_id and error_msg.
+- Do NOT call other tools in the same turn.
+
+SECOND TURN (after decision is saved):
+- If you submitted results: hand off to Executor.
+- If you marked failed: hand off to Strategist.
+
+FORBIDDEN: Never call multiple tools at once. Never output text. Never add suffixes like <|channel|>.
 """,
     tools=[
         tools.get_current_plan_step,
         tools.submit_step_result,
         tools.mark_step_failed,
-        transfer_to_executor,
-        transfer_to_strategist
     ],
-    handoffs=[transfer_to_executor, transfer_to_strategist],
+    handoffs=[handoff(executor_agent), handoff(strategist_agent)],
     model_settings=ModelSettings(parallel_tool_calls=False)
 )
 
-# 4. STRATEGIST
-strategist_agent = Agent(
-    name="Strategist",
+# 5. PLANNER (Depends on Executor)
+planner_agent = Agent(
+    name="Planner",
     model=MODEL,
-    instructions="""You are the Strategist.
+    instructions=f"""{RECOMMENDED_PROMPT_PREFIX}
+You are the Lead Planner. Your ONLY job is to create a research plan.
 
-1. Analyze why a step failed and update the plan using `add_steps_to_plan`.
-2. AFTER the plan is updated, call `transfer_to_executor`.
+CRITICAL RULES:
+1. Use EXACT tool names without any suffixes, prefixes, or special characters.
+2. Call EXACTLY ONE tool per turn. Never call multiple tools simultaneously.
+3. Available tools: add_steps_to_plan
 
-RULES:
-- NEVER respond with plain text summarizing your plan changes.
-- You MUST call the handoff tool to the Executor to continue the workflow.
+WORKFLOW:
+FIRST TURN:
+- Call `add_steps_to_plan` with a list of 3-5 research tasks as strings.
+- Each task must start with a number like "1. Task description"
+- Do NOT call any other tools in the same turn.
+- Do NOT output any text or JSON.
+
+SECOND TURN (after add_steps_to_plan succeeds):
+- Call the handoff tool to transfer to Executor.
+- Do NOT call any other tools.
+- Do NOT output any text.
+
+FORBIDDEN: Do NOT add commentary, suffixes like <|channel|>, or any text output.
 """,
-    tools=[tools.add_steps_to_plan, transfer_to_executor],
-    handoffs=[transfer_to_executor],
-    model_settings=ModelSettings(parallel_tool_calls=False)
-)
-
-# 5. REPORTER
-reporter_agent = Agent(
-    name="Reporter",
-    model=MODEL,
-    instructions="""You are the Reporter. Your goal is to create the final research summary.
-
-1. Call `get_completed_research_context` to get all confirmed findings.
-2. Write a comprehensive Markdown report based on these findings.
-3. Output the report text directly in the chat.
-""",
-    tools=[tools.get_completed_research_context],
+    tools=[tools.add_steps_to_plan],
+    handoffs=[handoff(executor_agent)],
     model_settings=ModelSettings(
         parallel_tool_calls=False,
-        tool_choice="auto"
+        tool_choice="required"
     )
 )
+
+# --- Post-Init Updates ---
+# Close the circular dependency loop for Executor -> Evaluator
+executor_agent.handoffs.append(handoff(evaluator_agent))

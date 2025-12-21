@@ -39,6 +39,7 @@ class SwarmRunner:
             session = DBSession()
 
             # Standard OpenAI Configuration without vLLM hacks
+            # Note: We only set global defaults here. Individual agent settings will take precedence.
             run_config = RunConfig(
                 model_provider=OpenAIProvider(
                     api_key=OPENAI_API_KEY,
@@ -46,8 +47,8 @@ class SwarmRunner:
                 ),
                 tracing_disabled=True,
                 model_settings=ModelSettings(
-                    temperature=0.0,
-                    parallel_tool_calls=False,
+                    temperature=0.0,  # Critical: deterministic tool calling
+                    parallel_tool_calls=False,  # Critical: prevent parallel tool calls
                     tool_choice="auto",
                 ),
             )

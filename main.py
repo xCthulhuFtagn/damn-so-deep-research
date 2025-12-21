@@ -16,6 +16,170 @@ import time
 setup_logging()
 logger = logging.getLogger(__name__)
 
+import streamlit as st
+import sqlite3
+import pandas as pd
+import logging
+import re
+import json
+
+from logging_setup import setup_logging
+from research_agents import planner_agent, executor_agent
+import database
+from runner import runner
+from config import DB_NAME, MAX_TURNS, DB_PATH
+import time
+
+# Configure logging as early as possible (Streamlit reruns safe)
+setup_logging()
+logger = logging.getLogger(__name__)
+
+# --- MONKEY PATCH START (V4 - Aggressive Early Interception) ---
+from agents import _run_impl
+import re
+
+# Сохраняем оригинальный метод (если еще не сохранен)
+if not hasattr(_run_impl.RunImpl, "_original_process_model_response"):
+    _run_impl.RunImpl._original_process_model_response = _run_impl.RunImpl.process_model_response
+
+# Regex pattern to detect and clean tool name artifacts
+TOOL_NAME_ARTIFACT_PATTERN = re.compile(r'^([a-zA-Z_][a-zA-Z0-9_]*)<\|.*$')
+
+def _clean_tool_name(name: str) -> str:
+    """
+    Aggressively clean tool name from artifacts like <|channel|>commentary, <|think|>, etc.
+    Returns the base tool name only.
+    """
+    if not name or not isinstance(name, str):
+        return name
+    
+    # Check for artifact pattern
+    match = TOOL_NAME_ARTIFACT_PATTERN.match(name)
+    if match:
+        clean = match.group(1)
+        logger.warning(f"🔧 Cleaned tool name: '{name}' → '{clean}'")
+        return clean
+    
+    # Fallback: split on <| if present
+    if "<|" in name:
+        clean = name.split("<|")[0]
+        logger.warning(f"🔧 Cleaned tool name (fallback): '{name}' → '{clean}'")
+        return clean
+    
+    return name
+
+def _sanitize_tool_calls(tool_calls):
+    """
+    Helper function to iterate and clean tool calls list, 
+    handling both object attributes and dictionary keys.
+    """
+    if not tool_calls:
+        return
+
+    for tc in tool_calls:
+        # Вариант 1: tc - это объект (Pydantic model)
+        if hasattr(tc, 'function') and hasattr(tc.function, 'name'):
+            original_name = tc.function.name
+            clean_name = _clean_tool_name(original_name)
+            if clean_name != original_name:
+                tc.function.name = clean_name
+        
+        # Вариант 2: tc - это словарь (dict)
+        elif isinstance(tc, dict) and 'function' in tc:
+            func = tc['function']
+            # func может быть словарем или объектом
+            if isinstance(func, dict) and 'name' in func:
+                original_name = func['name']
+                clean_name = _clean_tool_name(original_name)
+                if clean_name != original_name:
+                    func['name'] = clean_name
+            elif hasattr(func, 'name'):
+                original_name = func.name
+                clean_name = _clean_tool_name(original_name)
+                if clean_name != original_name:
+                    func.name = clean_name
+
+def _patched_process_model_response(*args, **kwargs):
+    """
+    Патч для очистки имен инструментов от мусора.
+    Перехватывает response перед обработкой и чистит его на любой глубине.
+    """
+    response = kwargs.get('response')
+    agent = kwargs.get('agent')
+    agent_name = agent.name if agent else 'Unknown'
+    
+    if response:
+        try:
+            # Log all tool calls BEFORE sanitization for debugging
+            tool_names_found = []
+            
+            # 1. Проверяем tool_calls прямо в корне (если response это Message)
+            if hasattr(response, 'tool_calls') and response.tool_calls:
+                for tc in response.tool_calls:
+                    if hasattr(tc, 'function') and hasattr(tc.function, 'name'):
+                        tool_names_found.append(tc.function.name)
+                _sanitize_tool_calls(response.tool_calls)
+            
+            # 2. Проверяем стандартную структуру OpenAI: response.choices[0].message.tool_calls
+            if hasattr(response, 'choices') and isinstance(response.choices, list):
+                for choice in response.choices:
+                    if hasattr(choice, 'message'):
+                         if hasattr(choice.message, 'tool_calls') and choice.message.tool_calls:
+                             for tc in choice.message.tool_calls:
+                                 if hasattr(tc, 'function') and hasattr(tc.function, 'name'):
+                                     tool_names_found.append(tc.function.name)
+                             _sanitize_tool_calls(choice.message.tool_calls)
+
+            # 3. Проверяем структуру agents.items.ModelResponse.output
+            if hasattr(response, 'output') and isinstance(response.output, list):
+                for item in response.output:
+                    # Проверяем прямой атрибут 'name' (ResponseFunctionToolCall)
+                    if hasattr(item, 'name') and item.name:
+                         original_name = item.name
+                         tool_names_found.append(original_name)
+                         clean_name = _clean_tool_name(original_name)
+                         if clean_name != original_name:
+                             item.name = clean_name
+            
+            # Log discovered tool calls
+            if tool_names_found:
+                logger.info(f"🔧 Agent '{agent_name}' called tools: {tool_names_found}")
+                
+            # DEBUG: Check handoff matching
+            if kwargs.get('handoffs'):
+                handoff_names = []
+                for h in kwargs['handoffs']:
+                    if hasattr(h, 'tool_name'):
+                        handoff_names.append(h.tool_name)
+                    elif hasattr(h, 'name'):
+                        handoff_names.append(h.name)
+                    else:
+                        handoff_names.append(str(h))
+
+                logger.info(f"🔍 Agent '{agent_name}' valid handoffs: {handoff_names}")
+                
+                for tc in tool_names_found:
+                    # Check if clean name matches any handoff
+                    clean = _clean_tool_name(tc)
+                    if clean in handoff_names:
+                        logger.info(f"✅ MATCH: Tool '{clean}' matches handoff!")
+                    else:
+                        if "transfer" in clean:
+                             logger.warning(f"⚠️ MISMATCH: Tool '{clean}' looks like handoff but not in list {handoff_names}")
+            
+        except Exception as e:
+            logger.error(f"🔧 MonkeyPatch Error during traversal: {e}", exc_info=True)
+            
+    # Вызываем оригинал
+    return _run_impl.RunImpl._original_process_model_response(*args, **kwargs)
+
+# Применяем патч
+_run_impl.RunImpl.process_model_response = _patched_process_model_response
+logger.info("✅ Applied MonkeyPatch (v4) - Aggressive tool name sanitization")
+# --- MONKEY PATCH END ---
+
+
+
 _STEP_RE = re.compile(r"^\s*(\d+)[\.\)]\s+(.*\S)\s*$")
 
 

@@ -33,30 +33,64 @@ class DBSession(Session):
         """Retrieve conversation history."""
         messages = database.load_messages()
         
-        # The SDK's Converter is strict about message structure.
-        # We must remove extra keys like 'sender' (especially if None)
-        # to avoid Unhandled item type or structure errors.
         cleaned = []
         for m in messages:
-            item = {
-                "role": m["role"],
-                "content": m["content"] or "", # Ensure content is always a string
-            }
-            if m.get("tool_calls"):
-                # SDK expects 'tool_calls' to be a list of dicts with 'id', 'type', 'function'
-                item["tool_calls"] = m["tool_calls"]
+            role = m["role"]
+            content = m["content"] or ""
             
-            # For role='tool', we MUST have 'tool_call_id'
-            if m["role"] == "tool" and m.get("tool_call_id"):
-                item["tool_call_id"] = m["tool_call_id"]
+            # 1. User/System/Developer
+            if role in ("user", "system", "developer"):
+                cleaned.append({
+                    "role": role,
+                    "content": content,
+                    "name": m.get("sender"),
+                })
             
-            # Map 'sender' to 'name' (standard OpenAI field) if present,
-            # but only if it's not None.
-            if m.get("sender"):
-                item["name"] = m["sender"]
+            # 2. Assistant
+            elif role == "assistant":
+                # To ensure content and tool calls are merged into one message by the Converter,
+                # we must use the internal 'ResponseOutputMessage' structure for content,
+                # followed by 'function_call' items.
                 
-            cleaned.append(item)
+                # Emit content if present
+                if content:
+                    cleaned.append({
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{
+                            "type": "output_text",
+                            "text": content
+                        }],
+                        "name": m.get("sender"),
+                    })
+                
+                # Emit tool calls as separate items
+                if m.get("tool_calls"):
+                    for tc in m["tool_calls"]:
+                        # Handle both dict and object (though DB load should give dicts)
+                        if isinstance(tc, dict):
+                            fn = tc.get("function", {})
+                            cleaned.append({
+                                "type": "function_call",
+                                "name": fn.get("name"),
+                                "arguments": fn.get("arguments"),
+                                "call_id": tc.get("id"),
+                                "name": m.get("sender"), # Assign sender to tool call too if needed
+                            })
+                        else:
+                            # Fallback if somehow not a dict (shouldn't happen with updated load_messages)
+                            pass
 
+            # 3. Tool Outputs
+            elif role == "tool":
+                cleaned.append({
+                    "type": "function_call_output",
+                    "call_id": m.get("tool_call_id"),
+                    "output": content,
+                    # Restore sender/name as it might be required by some backends or SDK logic
+                    "name": m.get("sender"),
+                })
+                
         if limit is not None:
             return cleaned[-limit:]
         return cleaned
@@ -66,29 +100,32 @@ class DBSession(Session):
         logger.debug(f"DBSession: add_items called with {len(items)} items")
         for item in items:
             # SDK session items can be dicts or objects
-            role = item.get("role") if isinstance(item, dict) else getattr(item, "role", None)
+            is_dict = isinstance(item, dict)
+            role = item.get("role") if is_dict else getattr(item, "role", None)
+            item_type = item.get("type") if is_dict else getattr(item, "type", None)
             
-            # If no role, it might be an internal SDK item (like ToolCall results or Handoffs)
+            # --- Role Inference ---
             if role is None:
-                if isinstance(item, dict):
-                    item_type = item.get("type")
-                    if item_type == "function_call_output" or "call_id" in item:
-                        role = "tool"
-                    elif item_type == "function_call" or "tool_calls" in item:
-                        role = "assistant"
-                    elif item_type == "reasoning":
-                        role = "assistant"
-                    else:
-                        role = "system"
+                if item_type == "function_call_output" or (is_dict and "call_id" in item and "output" in item):
+                    role = "tool"
+                elif item_type == "function_call" or (is_dict and "call_id" in item and "name" in item):
+                    role = "assistant"
+                elif item_type == "reasoning":
+                    role = "assistant"
                 else:
-                    role = "system"
-                logger.debug(f"DBSession: Assigned virtual role '{role}' to item type {type(item)}")
+                    role = "system" # Fallback
+                logger.debug(f"DBSession: Assigned virtual role '{role}' to item type {item_type}")
 
-            logger.debug(f"DBSession: processing item role={role}")
-            raw_content = item.get("content") if isinstance(item, dict) else getattr(item, "content", None)
-            logger.debug(f"DBSession: raw_content={raw_content}")
+            logger.debug(f"DBSession: processing item role={role} type={item_type}")
+            
+            # --- Content Extraction ---
+            raw_content = item.get("content") if is_dict else getattr(item, "content", None)
+            
+            # Handle 'output' field for tool outputs
+            if raw_content is None and (item_type == "function_call_output" or role == "tool"):
+                raw_content = item.get("output") if is_dict else getattr(item, "output", None)
+
             content = ""
-
             # Handle structured content
             if isinstance(raw_content, list):
                 parts = []
@@ -107,8 +144,25 @@ class DBSession(Session):
                 else:
                     content = content_str
 
-            tool_calls = item.get("tool_calls") if isinstance(item, dict) else getattr(item, "tool_calls", None)
-            tool_call_id = item.get("tool_call_id") or item.get("call_id") if isinstance(item, dict) else getattr(item, "tool_call_id", getattr(item, "call_id", None))
+            # --- Tool Call Extraction ---
+            tool_calls = item.get("tool_calls") if is_dict else getattr(item, "tool_calls", None)
+            
+            # Special handling for 'function_call' item type (single tool call)
+            if tool_calls is None and item_type == "function_call":
+                call_id = item.get("call_id") if is_dict else getattr(item, "call_id", None)
+                name = item.get("name") if is_dict else getattr(item, "name", None)
+                arguments = item.get("arguments") if is_dict else getattr(item, "arguments", None)
+                if call_id and name:
+                    tool_calls = [{
+                        "id": call_id,
+                        "type": "function",
+                        "function": {
+                            "name": name,
+                            "arguments": arguments or "{}"
+                        }
+                    }]
+
+            tool_call_id = item.get("tool_call_id") or item.get("call_id") if is_dict else getattr(item, "tool_call_id", getattr(item, "call_id", None))
             
             # Convert tool calls to serializable list if it's an object
             if tool_calls and not isinstance(tool_calls, list):
@@ -142,7 +196,7 @@ class DBSession(Session):
                         except Exception:
                             logger.warning("Failed to serialize tool call object")
 
-            sender = item.get("sender") or item.get("name") if isinstance(item, dict) else getattr(item, "sender", getattr(item, "name", None))
+            sender = item.get("sender") or item.get("name") if is_dict else getattr(item, "sender", getattr(item, "name", None))
 
             # CRITICAL: Do NOT skip any items. The Runner needs the full history
             # of tool calls and outputs to maintain its internal state machine.
