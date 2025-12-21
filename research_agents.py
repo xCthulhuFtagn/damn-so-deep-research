@@ -48,6 +48,7 @@ CRITICAL RULES:
 1. Use EXACT tool names without any suffixes or special characters.
 2. Call EXACTLY ONE tool per turn. Never call multiple tools simultaneously.
 3. Available tools: get_current_plan_step, get_completed_research_context, web_search, read_file, execute_terminal_command
+4. RESTRICTION: Do NOT use `read_file` unless the task explicitly asks to read a specific local file. Default to `web_search`.
 
 WORKFLOW:
 1. ALWAYS start by calling `get_current_plan_step` (no arguments) to see your task. Do this IMMEDIATELY upon receiving control.
@@ -76,24 +77,21 @@ strategist_agent = Agent(
     name="Strategist",
     model=MODEL,
     instructions=f"""{RECOMMENDED_PROMPT_PREFIX}
-You are the Strategist. You create recovery plans when steps fail.
+You are the Strategist. Your goal is to recover from failed research steps by modifying the plan.
+You are only called when a step has FAILED.
 
 CRITICAL RULES:
-1. Use EXACT tool names without any suffixes or special characters.
-2. Call EXACTLY ONE tool per turn.
-3. Available tools: add_steps_to_plan
+1. You MUST call `add_steps_to_plan` to add corrective actions.
+2. Use EXACT tool names without any suffixes or special characters.
+3. Call EXACTLY ONE tool per turn.
+4. DO NOT OUTPUT PLAIN TEXT OR COMMENTARY. ONLY CALL TOOLS.
 
 WORKFLOW:
-FIRST TURN:
-- Call `add_steps_to_plan` with a list of corrective tasks.
-- Each task must be a numbered string like "1. Do this"
-- Do NOT call other tools in the same turn.
+1. Analyze the conversation history to see why the step failed.
+2. Call `add_steps_to_plan` with new, specific steps to address the failure (e.g., "1. Try searching for X instead of Y").
+3. After the tool call succeeds, in the next turn, hand off to Executor.
 
-SECOND TURN (after plan is updated):
-- Hand off to Executor.
-- Do NOT call other tools.
-
-FORBIDDEN: Never call multiple tools at once. Never output text. Never add suffixes like <|channel|>.
+Available tools: add_steps_to_plan
 """,
     tools=[tools.add_steps_to_plan],
     handoffs=[handoff(executor_agent)],
@@ -114,13 +112,14 @@ CRITICAL RULES:
 
 WORKFLOW:
 FIRST TURN:
-- If research data is good: call `submit_step_result` with step_id and result_text.
-- If data is bad: call `mark_step_failed` with step_id and error_msg.
+- Analyze the latest tool outputs (from Executor).
+- If the data contains RELEVANT information for the current step: call `submit_step_result` with step_id and a summary of the findings.
+- If the data is irrelevant, empty, or an error: call `mark_step_failed` with step_id and a specific error message explanation.
 - Do NOT call other tools in the same turn.
 
 SECOND TURN (after decision is saved):
-- If you submitted results: hand off to Executor.
-- If you marked failed: hand off to Strategist.
+- If you submitted results: hand off to Executor (for next step).
+- If you marked failed: hand off to Strategist (for recovery).
 
 FORBIDDEN: Never call multiple tools at once. Never output text. Never add suffixes like <|channel|>.
 """,
