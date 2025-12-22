@@ -138,6 +138,26 @@ def execute_terminal_command(command: str) -> str:
 # --- Database / Context Tools ---
 
 @function_tool
+def web_search_summary(summarized_content: str) -> str:
+    """
+    Сохраняет краткую сводку результатов поиска в контекст.
+    АВТОМАТИЧЕСКИ удаляет полный текст исходного поиска из истории сообщений.
+    
+    Args:
+        summarized_content (str): Краткая сводка результатов поиска.
+    """
+    # Логируем действие
+    logger.info("summary: saving content (len=%s) and pruning previous raw output", len(summarized_content))
+    
+    # 1. Вызываем метод очистки в DatabaseManager
+    # Это удалит "тяжелый" текст предыдущего шага (web_search) из БД
+    db.prune_last_tool_message()
+    
+    # 2. Возвращаем успех
+    # Сама суммаризация (summarized_content) сохранится в аргументах вызова этого инструмента
+    return "Summary saved. Raw search data has been removed from history to free up context window."
+
+@function_tool
 def answer_from_knowledge(answer: str) -> str:
     """
     Эхо-инструмент: принимает сгенерированный текст ответа и возвращает его как есть,

@@ -32,37 +32,37 @@ class DatabaseManager:
     def init_db(self):
         logger.info("DB init: path=%s", self.db_path)
         conn = self.get_connection()
-    c = conn.cursor()
-    
-        # Plan Table
-    c.execute('''CREATE TABLE IF NOT EXISTS plan (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    step_number INTEGER,
-                    description TEXT,
-                    status TEXT DEFAULT 'TODO', 
-                    result TEXT,
-                    feedback TEXT
-                )''')
-    
-        # Approvals Table
-    c.execute('''CREATE TABLE IF NOT EXISTS approvals (
-                    command_hash TEXT PRIMARY KEY,
-                    command_text TEXT,
-                    approved BOOLEAN DEFAULT 0
-                )''')
-    
-        # Messages Table (Updated with session_id and task_number)
-    c.execute('''CREATE TABLE IF NOT EXISTS messages (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    role TEXT,
-                    content TEXT,
-                    tool_calls TEXT,
-                    tool_call_id TEXT,
-                    sender TEXT,
-                        session_id TEXT DEFAULT 'default',
-                        task_number INTEGER,
-                    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-                )''')
+        c = conn.cursor()
+        
+            # Plan Table
+        c.execute('''CREATE TABLE IF NOT EXISTS plan (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        step_number INTEGER,
+                        description TEXT,
+                        status TEXT DEFAULT 'TODO', 
+                        result TEXT,
+                        feedback TEXT
+                    )''')
+        
+            # Approvals Table
+        c.execute('''CREATE TABLE IF NOT EXISTS approvals (
+                        command_hash TEXT PRIMARY KEY,
+                        command_text TEXT,
+                        approved BOOLEAN DEFAULT 0
+                    )''')
+        
+            # Messages Table (Updated with session_id and task_number)
+        c.execute('''CREATE TABLE IF NOT EXISTS messages (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        role TEXT,
+                        content TEXT,
+                        tool_calls TEXT,
+                        tool_call_id TEXT,
+                        sender TEXT,
+                            session_id TEXT DEFAULT 'default',
+                            task_number INTEGER,
+                        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )''')
     
         # Check for new columns in messages if table exists (migration)
         c.execute("PRAGMA table_info(messages)")
@@ -78,66 +78,66 @@ class DatabaseManager:
             c.execute("CREATE INDEX IF NOT EXISTS idx_messages_task_number ON messages(task_number)")
             
         # Global State Table
-    c.execute('''CREATE TABLE IF NOT EXISTS global_state (
-                    key TEXT PRIMARY KEY,
-                    value INTEGER
-                )''')
-    
-    c.execute("INSERT OR IGNORE INTO global_state (key, value) VALUES ('swarm_running', 0)")
-    c.execute("INSERT OR IGNORE INTO global_state (key, value) VALUES ('stop_requested', 0)")
-    
-    conn.commit()
-    conn.close()
-    logger.debug("DB init done")
+        c.execute('''CREATE TABLE IF NOT EXISTS global_state (
+                        key TEXT PRIMARY KEY,
+                        value INTEGER
+                    )''')
+        
+        c.execute("INSERT OR IGNORE INTO global_state (key, value) VALUES ('swarm_running', 0)")
+        c.execute("INSERT OR IGNORE INTO global_state (key, value) VALUES ('stop_requested', 0)")
+        
+        conn.commit()
+        conn.close()
+        logger.debug("DB init done")
 
     def clear_db(self):
-    """Очистка базы для новой сессии"""
-    logger.info("DB clear: deleting plan + approvals + messages")
+        """Очистка базы для новой сессии"""
+        logger.info("DB clear: deleting plan + approvals + messages")
         conn = self.get_connection()
-    c = conn.cursor()
-    c.execute("DELETE FROM plan")
-    c.execute("DELETE FROM approvals")
-    c.execute("DELETE FROM messages")
-    # Сбрасываем флаги в global_state
-    c.execute("UPDATE global_state SET value = 0 WHERE key = 'swarm_running'")
-    c.execute("UPDATE global_state SET value = 0 WHERE key = 'stop_requested'")
-    conn.commit()
-    conn.close()
-    logger.debug("DB clear done")
+        c = conn.cursor()
+        c.execute("DELETE FROM plan")
+        c.execute("DELETE FROM approvals")
+        c.execute("DELETE FROM messages")
+        # Сбрасываем флаги в global_state
+        c.execute("UPDATE global_state SET value = 0 WHERE key = 'swarm_running'")
+        c.execute("UPDATE global_state SET value = 0 WHERE key = 'stop_requested'")
+        conn.commit()
+        conn.close()
+        logger.debug("DB clear done")
 
 # --- Global State Operations ---
 
     def set_swarm_running(self, running: bool):
-    val = 1 if running else 0
+        val = 1 if running else 0
         conn = self.get_connection()
-    c = conn.cursor()
-    c.execute("UPDATE global_state SET value = ? WHERE key = 'swarm_running'", (val,))
-    if not running:
-        c.execute("UPDATE global_state SET value = 0 WHERE key = 'stop_requested'")
-    conn.commit()
-    conn.close()
+        c = conn.cursor()
+        c.execute("UPDATE global_state SET value = ? WHERE key = 'swarm_running'", (val,))
+        if not running:
+            c.execute("UPDATE global_state SET value = 0 WHERE key = 'stop_requested'")
+        conn.commit()
+        conn.close()
 
     def is_swarm_running(self) -> bool:
         conn = self.get_connection()
-    c = conn.cursor()
-    row = c.execute("SELECT value FROM global_state WHERE key = 'swarm_running'").fetchone()
-    conn.close()
-    return bool(row[0]) if row else False
+        c = conn.cursor()
+        row = c.execute("SELECT value FROM global_state WHERE key = 'swarm_running'").fetchone()
+        conn.close()
+        return bool(row[0]) if row else False
 
     def set_stop_signal(self, requested: bool):
-    val = 1 if requested else 0
+        val = 1 if requested else 0
         conn = self.get_connection()
-    c = conn.cursor()
-    c.execute("UPDATE global_state SET value = ? WHERE key = 'stop_requested'", (val,))
-    conn.commit()
-    conn.close()
+        c = conn.cursor()
+        c.execute("UPDATE global_state SET value = ? WHERE key = 'stop_requested'", (val,))
+        conn.commit()
+        conn.close()
 
     def should_stop(self) -> bool:
         conn = self.get_connection()
-    c = conn.cursor()
-    row = c.execute("SELECT value FROM global_state WHERE key = 'stop_requested'").fetchone()
-    conn.close()
-    return bool(row[0]) if row else False
+        c = conn.cursor()
+        row = c.execute("SELECT value FROM global_state WHERE key = 'stop_requested'").fetchone()
+        conn.close()
+        return bool(row[0]) if row else False
 
     # --- Task Context ---
 
@@ -153,65 +153,65 @@ class DatabaseManager:
     def add_plan_step(self, description, step_number):
         logger.info("DB add_plan_step: step_number=%s", step_number)
         conn = self.get_connection()
-    c = conn.cursor()
-    c.execute("INSERT INTO plan (description, step_number) VALUES (?, ?)", (description, step_number))
-    conn.commit()
-    conn.close()
+        c = conn.cursor()
+        c.execute("INSERT INTO plan (description, step_number) VALUES (?, ?)", (description, step_number))
+        conn.commit()
+        conn.close()
 
     def get_next_step(self):
         conn = self.get_connection()
-    df = pd.read_sql_query("SELECT * FROM plan WHERE status IN ('TODO', 'IN_PROGRESS') ORDER BY step_number LIMIT 1", conn)
-    conn.close()
-    return df.iloc[0] if not df.empty else None
+        df = pd.read_sql_query("SELECT * FROM plan WHERE status IN ('TODO', 'IN_PROGRESS') ORDER BY step_number LIMIT 1", conn)
+        conn.close()
+        return df.iloc[0] if not df.empty else None
 
     def update_step_status(self, step_id, status, result=None):
         logger.info("DB update_step_status: step_id=%s status=%s", step_id, status)
         conn = self.get_connection()
-    c = conn.cursor()
-    if result:
-        c.execute("UPDATE plan SET status = ?, result = ? WHERE id = ?", (status, result, step_id))
-    else:
-        c.execute("UPDATE plan SET status = ? WHERE id = ?", (status, step_id))
-    conn.commit()
-    conn.close()
+        c = conn.cursor()
+        if result:
+            c.execute("UPDATE plan SET status = ?, result = ? WHERE id = ?", (status, result, step_id))
+        else:
+            c.execute("UPDATE plan SET status = ? WHERE id = ?", (status, step_id))
+        conn.commit()
+        conn.close()
 
     def get_all_plan(self):
         conn = self.get_connection()
-    df = pd.read_sql_query("SELECT * FROM plan ORDER BY step_number", conn)
-    conn.close()
-    return df
+        df = pd.read_sql_query("SELECT * FROM plan ORDER BY step_number", conn)
+        conn.close()
+        return df
 
     def get_max_step_number(self) -> int:
         conn = self.get_connection()
-    c = conn.cursor()
-    row = c.execute("SELECT COALESCE(MAX(step_number), 0) FROM plan").fetchone()
-    conn.close()
-    return int(row[0]) if row and row[0] is not None else 0
+        c = conn.cursor()
+        row = c.execute("SELECT COALESCE(MAX(step_number), 0) FROM plan").fetchone()
+        conn.close()
+        return int(row[0]) if row and row[0] is not None else 0
 
     def get_existing_step_numbers(self) -> set[int]:
         conn = self.get_connection()
-    c = conn.cursor()
-    rows = c.execute("SELECT step_number FROM plan").fetchall()
-    conn.close()
+        c = conn.cursor()
+        rows = c.execute("SELECT step_number FROM plan").fetchall()
+        conn.close()
         return {int(r[0]) for r in rows}
 
     def get_completed_steps_count(self):
         conn = self.get_connection()
-    c = conn.cursor()
-    count = c.execute("SELECT COUNT(*) FROM plan WHERE status='DONE'").fetchone()[0]
-    conn.close()
-    return count
+        c = conn.cursor()
+        count = c.execute("SELECT COUNT(*) FROM plan WHERE status='DONE'").fetchone()[0]
+        conn.close()
+        return count
 
     def get_done_results_text(self):
         conn = self.get_connection()
-    df = pd.read_sql_query("SELECT step_number, description, result FROM plan WHERE status='DONE' ORDER BY step_number", conn)
-    conn.close()
-    if df.empty:
-        return "No completed steps yet."
-    text = "COMPLETED RESEARCH STEPS:\n"
-    for _, row in df.iterrows():
-        text += f"Step {row['step_number']}: {row['description']}\nResult: {row['result']}\n{'-'*20}\n"
-    return text
+        df = pd.read_sql_query("SELECT step_number, description, result FROM plan WHERE status='DONE' ORDER BY step_number", conn)
+        conn.close()
+        if df.empty:
+            return "No completed steps yet."
+        text = "COMPLETED RESEARCH STEPS:\n"
+        for _, row in df.iterrows():
+            text += f"Step {row['step_number']}: {row['description']}\nResult: {row['result']}\n{'-'*20}\n"
+        return text
 
     def get_plan_summary(self) -> str:
         """Returns a compact status list of all steps."""
@@ -227,30 +227,30 @@ class DatabaseManager:
 
     def save_message(self, role: str, content: str, tool_calls: list = None, tool_call_id: str = None, sender: str = None, session_id: str = "default"):
         conn = self.get_connection()
-    c = conn.cursor()
-    tool_calls_json = json.dumps(tool_calls) if tool_calls else None
+        c = conn.cursor()
+        tool_calls_json = json.dumps(tool_calls) if tool_calls else None
         
         # Use explicit task_number if provided via set_active_task (Task-Scoped Memory)
         task_num = self.get_active_task()
         
-    c.execute(
-            "INSERT INTO messages (role, content, tool_calls, tool_call_id, sender, session_id, task_number) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (role, content, tool_calls_json, tool_call_id, sender, session_id, task_num)
-    )
-    conn.commit()
-    conn.close()
+        c.execute(
+                "INSERT INTO messages (role, content, tool_calls, tool_call_id, sender, session_id, task_number) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (role, content, tool_calls_json, tool_call_id, sender, session_id, task_num)
+        )
+        conn.commit()
+        conn.close()
         logger.debug("DB save_message: role=%s session=%s task=%s", role, session_id, task_num)
 
     def load_messages(self, session_id: str = None):
         """Loads messages, optionally filtering by session_id."""
         conn = self.get_connection()
-    c = conn.cursor()
+        c = conn.cursor()
         if session_id:
             c.execute("SELECT role, content, tool_calls, tool_call_id, sender, session_id, task_number FROM messages WHERE session_id = ? ORDER BY id", (session_id,))
         else:
             c.execute("SELECT role, content, tool_calls, tool_call_id, sender, session_id, task_number FROM messages ORDER BY id")
-    rows = c.fetchall()
-    conn.close()
+        rows = c.fetchall()
+        conn.close()
         return self._rows_to_dicts(rows)
 
     def get_messages_for_task(self, session_id: str, task_number: int):
@@ -261,15 +261,15 @@ class DatabaseManager:
             (session_id, task_number)
         )
         rows = c.fetchall()
-    conn.close()
+        conn.close()
         return self._rows_to_dicts(rows)
 
     def get_last_n_messages(self, session_id: str, n: int):
         conn = self.get_connection()
-    c = conn.cursor()
+        c = conn.cursor()
         # Subquery to get last N then order ASC
-    c.execute(f'''
-            SELECT role, content, tool_calls, tool_call_id, sender, session_id, task_number 
+        c.execute(f'''
+        SELECT role, content, tool_calls, tool_call_id, sender, session_id, task_number 
         FROM (
                 SELECT * FROM messages 
                 WHERE session_id = ?
@@ -279,11 +279,11 @@ class DatabaseManager:
         ORDER BY id ASC
         ''', (session_id, n))
         rows = c.fetchall()
-    conn.close()
+        conn.close()
         return self._rows_to_dicts(rows)
 
     def _rows_to_dicts(self, rows):
-    messages = []
+        messages = []
         for row in rows:
             role, content, tool_calls_json, tool_call_id, sender, session_id, task_number = row
         msg = {
@@ -304,7 +304,7 @@ class DatabaseManager:
 
     def get_initial_user_prompt(self, session_id: str = None) -> str | None:
         conn = self.get_connection()
-    c = conn.cursor()
+        c = conn.cursor()
         query = "SELECT content FROM messages WHERE role='user'"
         params = []
         if session_id:
@@ -314,42 +314,73 @@ class DatabaseManager:
         
         c.execute(query, tuple(params))
         row = c.fetchone()
-    conn.close()
+        conn.close()
         return str(row[0]) if row and row[0] else None
+    
+    def prune_last_tool_message(self) -> bool:
+        """
+        Находит последнее сообщение с ролью 'tool' (обычно это результат web_search или read_file)
+        и заменяет его содержимое на заглушку. Используется для экономии токенов после суммаризации.
+        """
+        conn = self.get_connection()
+        c = conn.cursor()
+        try:
+            # 1. Ищем ID последнего сообщения от инструмента
+            # Мы сортируем по ID убыванию и берем первое, это и есть "последнее" событие
+            c.execute("SELECT id FROM messages WHERE role='tool' ORDER BY id DESC LIMIT 1")
+            row = c.fetchone()
+            
+            if row:
+                last_tool_msg_id = row[0]
+                # 2. Заменяем тяжелый контент на заглушку
+                pruned_text = "[RAW DATA PRUNED. See summary in the next message arguments.]"
+                c.execute("UPDATE messages SET content = ? WHERE id = ?", (pruned_text, last_tool_msg_id))
+                conn.commit()
+                logger.info("DB: Pruned raw content of tool message ID %s", last_tool_msg_id)
+                return True
+            else:
+                logger.warning("DB: Prune requested, but no tool message found.")
+                return False
+                
+        except Exception as e:
+            logger.error("DB: Failed to prune tool message: %s", e)
+            return False
+        finally:
+            conn.close()
 
     # --- Approvals ---
 
     def has_pending_approvals(self) -> bool:
         conn = self.get_connection()
-    c = conn.cursor()
-    row = c.execute("SELECT COUNT(*) FROM approvals WHERE approved = 0").fetchone()
-    conn.close()
-    return bool(row[0]) if row else False
+        c = conn.cursor()
+        row = c.execute("SELECT COUNT(*) FROM approvals WHERE approved = 0").fetchone()
+        conn.close()
+        return bool(row[0]) if row else False
 
     # --- UI Helpers ---
 
     def prune_messages_for_ui(self):
         """Clean up database messages."""
         conn = self.get_connection()
-    c = conn.cursor()
-    c.execute(
-        """
-        DELETE FROM messages
-        WHERE
-          role = 'tool'
-          OR (role = 'assistant' AND tool_calls IS NOT NULL)
-          OR (role = 'assistant' AND (content IS NULL OR TRIM(content) = ''))
-          OR (
-            role = 'system'
-            AND (
-              content IS NULL
-              OR (content NOT LIKE '%Error%' AND LOWER(content) NOT LIKE '%failed%')
+        c = conn.cursor()
+        c.execute(
+            """
+            DELETE FROM messages
+            WHERE
+            role = 'tool'
+            OR (role = 'assistant' AND tool_calls IS NOT NULL)
+            OR (role = 'assistant' AND (content IS NULL OR TRIM(content) = ''))
+            OR (
+                role = 'system'
+                AND (
+                content IS NULL
+                OR (content NOT LIKE '%Error%' AND LOWER(content) NOT LIKE '%failed%')
+                )
             )
-          )
-        """
-    )
-    conn.commit()
-    conn.close()
+            """
+        )
+        conn.commit()
+        conn.close()
 
 # Global Instance
 db = DatabaseManager()
@@ -385,6 +416,7 @@ def get_active_step_description():
     if not df.empty: return str(df.iloc[0]['description'])
     return "No active research step."
 def get_initial_user_prompt(session_id=None): return db.get_initial_user_prompt(session_id)
+def prune_last_tool_message(): return db.prune_last_tool_message()
 def has_pending_approvals(): return db.has_pending_approvals()
 def prune_messages_for_ui(): db.prune_messages_for_ui()
 def load_agent_window(limit=10): return db.get_last_n_messages("default", limit) # Approximate mapping
