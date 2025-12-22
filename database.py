@@ -1,21 +1,40 @@
 import sqlite3
 import pandas as pd
 import json
-from config import DB_PATH 
 import logging
-
+from typing import List, Optional, Any, Dict
+from config import DB_PATH 
 from logging_setup import setup_logging
 
 setup_logging()
 logger = logging.getLogger(__name__)
 
-def init_db():
-    logger.info("DB init: path=%s", DB_PATH)
-    conn = sqlite3.connect(DB_PATH)
+class DatabaseManager:
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super(DatabaseManager, cls).__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+
+    def __init__(self):
+        if self._initialized:
+            return
+        self.db_path = DB_PATH
+        self._active_task_number = None
+        self._initialized = True
+        self.init_db()
+
+    def get_connection(self):
+        return sqlite3.connect(self.db_path)
+
+    def init_db(self):
+        logger.info("DB init: path=%s", self.db_path)
+        conn = self.get_connection()
     c = conn.cursor()
     
-    # Таблица Плана
-    # status: TODO, IN_PROGRESS, DONE, FAILED
+        # Plan Table
     c.execute('''CREATE TABLE IF NOT EXISTS plan (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     step_number INTEGER,
@@ -25,14 +44,14 @@ def init_db():
                     feedback TEXT
                 )''')
     
-    # Таблица Одобрений для терминала
+        # Approvals Table
     c.execute('''CREATE TABLE IF NOT EXISTS approvals (
                     command_hash TEXT PRIMARY KEY,
                     command_text TEXT,
                     approved BOOLEAN DEFAULT 0
                 )''')
     
-    # Таблица Истории Чата
+        # Messages Table (Updated with session_id and task_number)
     c.execute('''CREATE TABLE IF NOT EXISTS messages (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     role TEXT,
@@ -40,16 +59,30 @@ def init_db():
                     tool_calls TEXT,
                     tool_call_id TEXT,
                     sender TEXT,
+                        session_id TEXT DEFAULT 'default',
+                        task_number INTEGER,
                     timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
                 )''')
     
-    # Таблица Глобального Состояния
+        # Check for new columns in messages if table exists (migration)
+        c.execute("PRAGMA table_info(messages)")
+        columns = [info[1] for info in c.fetchall()]
+        if 'session_id' not in columns:
+            logger.info("Migrating DB: adding session_id to messages")
+            c.execute("ALTER TABLE messages ADD COLUMN session_id TEXT DEFAULT 'default'")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id)")
+        
+        if 'task_number' not in columns:
+            logger.info("Migrating DB: adding task_number to messages")
+            c.execute("ALTER TABLE messages ADD COLUMN task_number INTEGER")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_messages_task_number ON messages(task_number)")
+            
+        # Global State Table
     c.execute('''CREATE TABLE IF NOT EXISTS global_state (
                     key TEXT PRIMARY KEY,
                     value INTEGER
                 )''')
     
-    # Инициализация дефолтных значений, если их нет
     c.execute("INSERT OR IGNORE INTO global_state (key, value) VALUES ('swarm_running', 0)")
     c.execute("INSERT OR IGNORE INTO global_state (key, value) VALUES ('stop_requested', 0)")
     
@@ -57,10 +90,10 @@ def init_db():
     conn.close()
     logger.debug("DB init done")
 
-def clear_db():
+    def clear_db(self):
     """Очистка базы для новой сессии"""
     logger.info("DB clear: deleting plan + approvals + messages")
-    conn = sqlite3.connect(DB_PATH)
+        conn = self.get_connection()
     c = conn.cursor()
     c.execute("DELETE FROM plan")
     c.execute("DELETE FROM approvals")
@@ -74,73 +107,66 @@ def clear_db():
 
 # --- Global State Operations ---
 
-def set_swarm_running(running: bool):
-    """Sets the swarm_running flag in global_state."""
+    def set_swarm_running(self, running: bool):
     val = 1 if running else 0
-    conn = sqlite3.connect(DB_PATH)
+        conn = self.get_connection()
     c = conn.cursor()
     c.execute("UPDATE global_state SET value = ? WHERE key = 'swarm_running'", (val,))
-    # Если мы останавливаем рой, сбрасываем сигнал остановки
     if not running:
         c.execute("UPDATE global_state SET value = 0 WHERE key = 'stop_requested'")
     conn.commit()
     conn.close()
-    logger.debug("DB set_swarm_running: %s", running)
 
-def is_swarm_running() -> bool:
-    """Checks if the swarm is currently running."""
-    conn = sqlite3.connect(DB_PATH)
+    def is_swarm_running(self) -> bool:
+        conn = self.get_connection()
     c = conn.cursor()
     row = c.execute("SELECT value FROM global_state WHERE key = 'swarm_running'").fetchone()
     conn.close()
     return bool(row[0]) if row else False
 
-def set_stop_signal(requested: bool):
-    """Sets the stop_requested flag in global_state."""
+    def set_stop_signal(self, requested: bool):
     val = 1 if requested else 0
-    conn = sqlite3.connect(DB_PATH)
+        conn = self.get_connection()
     c = conn.cursor()
     c.execute("UPDATE global_state SET value = ? WHERE key = 'stop_requested'", (val,))
     conn.commit()
     conn.close()
-    logger.info("DB set_stop_signal: %s", requested)
 
-def should_stop() -> bool:
-    """Checks if a stop has been requested."""
-    conn = sqlite3.connect(DB_PATH)
+    def should_stop(self) -> bool:
+        conn = self.get_connection()
     c = conn.cursor()
     row = c.execute("SELECT value FROM global_state WHERE key = 'stop_requested'").fetchone()
     conn.close()
     return bool(row[0]) if row else False
 
+    # --- Task Context ---
+
+    def set_active_task(self, task_number: Optional[int]):
+        self._active_task_number = task_number
+        logger.debug("Set active task number: %s", task_number)
+
+    def get_active_task(self) -> Optional[int]:
+        return self._active_task_number
+
 # --- Plan Operations ---
 
-def add_plan_step(description, step_number):
-    logger.info("DB add_plan_step: step_number=%s desc_chars=%s", step_number, len(description or ""))
-    conn = sqlite3.connect(DB_PATH)
+    def add_plan_step(self, description, step_number):
+        logger.info("DB add_plan_step: step_number=%s", step_number)
+        conn = self.get_connection()
     c = conn.cursor()
-    # Проверяем дубликаты по номеру шага, если нужно, или просто вставляем
     c.execute("INSERT INTO plan (description, step_number) VALUES (?, ?)", (description, step_number))
     conn.commit()
     conn.close()
 
-def get_next_step():
-    """Возвращает первый невыполненный шаг"""
-    conn = sqlite3.connect(DB_PATH)
-    # Берем TODO или IN_PROGRESS, сортируем по номеру
+    def get_next_step(self):
+        conn = self.get_connection()
     df = pd.read_sql_query("SELECT * FROM plan WHERE status IN ('TODO', 'IN_PROGRESS') ORDER BY step_number LIMIT 1", conn)
     conn.close()
-    logger.debug("DB get_next_step: found=%s", not df.empty)
     return df.iloc[0] if not df.empty else None
 
-def update_step_status(step_id, status, result=None):
-    logger.info(
-        "DB update_step_status: step_id=%s status=%s has_result=%s",
-        step_id,
-        status,
-        bool(result),
-    )
-    conn = sqlite3.connect(DB_PATH)
+    def update_step_status(self, step_id, status, result=None):
+        logger.info("DB update_step_status: step_id=%s status=%s", step_id, status)
+        conn = self.get_connection()
     c = conn.cursor()
     if result:
         c.execute("UPDATE plan SET status = ?, result = ? WHERE id = ?", (status, result, step_id))
@@ -149,167 +175,124 @@ def update_step_status(step_id, status, result=None):
     conn.commit()
     conn.close()
 
-def get_all_plan():
-    """Для отображения в UI"""
-    conn = sqlite3.connect(DB_PATH)
+    def get_all_plan(self):
+        conn = self.get_connection()
     df = pd.read_sql_query("SELECT * FROM plan ORDER BY step_number", conn)
     conn.close()
-    logger.debug("DB get_all_plan: rows=%s", len(df))
     return df
 
-
-def get_max_step_number() -> int:
-    """Returns the maximum step_number in the plan (0 if empty)."""
-    conn = sqlite3.connect(DB_PATH)
+    def get_max_step_number(self) -> int:
+        conn = self.get_connection()
     c = conn.cursor()
     row = c.execute("SELECT COALESCE(MAX(step_number), 0) FROM plan").fetchone()
     conn.close()
     return int(row[0]) if row and row[0] is not None else 0
 
-
-def get_existing_step_numbers() -> set[int]:
-    """Returns a set of all step_number values currently in the plan."""
-    conn = sqlite3.connect(DB_PATH)
+    def get_existing_step_numbers(self) -> set[int]:
+        conn = self.get_connection()
     c = conn.cursor()
     rows = c.execute("SELECT step_number FROM plan").fetchall()
     conn.close()
-    out: set[int] = set()
-    for (num,) in rows:
-        try:
-            out.add(int(num))
-        except Exception:
-            continue
-    return out
+        return {int(r[0]) for r in rows}
 
-def get_completed_steps_count():
-    """Для логики очистки памяти"""
-    conn = sqlite3.connect(DB_PATH)
+    def get_completed_steps_count(self):
+        conn = self.get_connection()
     c = conn.cursor()
     count = c.execute("SELECT COUNT(*) FROM plan WHERE status='DONE'").fetchone()[0]
     conn.close()
-    logger.debug("DB get_completed_steps_count: count=%s", count)
     return count
 
-def get_done_results_text():
-    """Возвращает контекст выполненных шагов для агентов"""
-    conn = sqlite3.connect(DB_PATH)
+    def get_done_results_text(self):
+        conn = self.get_connection()
     df = pd.read_sql_query("SELECT step_number, description, result FROM plan WHERE status='DONE' ORDER BY step_number", conn)
     conn.close()
-    
     if df.empty:
-        logger.debug("DB get_done_results_text: empty")
         return "No completed steps yet."
-    
     text = "COMPLETED RESEARCH STEPS:\n"
     for _, row in df.iterrows():
         text += f"Step {row['step_number']}: {row['description']}\nResult: {row['result']}\n{'-'*20}\n"
-    logger.debug("DB get_done_results_text: steps=%s chars=%s", len(df), len(text))
     return text
+
+    def get_plan_summary(self) -> str:
+        """Returns a compact status list of all steps."""
+        df = self.get_all_plan()
+        if df.empty:
+            return "Plan is empty."
+        summary = []
+        for _, row in df.iterrows():
+            summary.append(f"Step {row['step_number']}: {row['status']} - {row['description']}")
+        return "\n".join(summary)
 
 # --- Message Persistence ---
 
-def save_message(role: str, content: str, tool_calls: list = None, tool_call_id: str = None, sender: str = None):
-    """Saves a message to the database."""
-    conn = sqlite3.connect(DB_PATH)
+    def save_message(self, role: str, content: str, tool_calls: list = None, tool_call_id: str = None, sender: str = None, session_id: str = "default"):
+        conn = self.get_connection()
     c = conn.cursor()
     tool_calls_json = json.dumps(tool_calls) if tool_calls else None
+        
+        # Use explicit task_number if provided via set_active_task (Task-Scoped Memory)
+        task_num = self.get_active_task()
+        
     c.execute(
-        "INSERT INTO messages (role, content, tool_calls, tool_call_id, sender) VALUES (?, ?, ?, ?, ?)",
-        (role, content, tool_calls_json, tool_call_id, sender)
+            "INSERT INTO messages (role, content, tool_calls, tool_call_id, sender, session_id, task_number) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (role, content, tool_calls_json, tool_call_id, sender, session_id, task_num)
     )
     conn.commit()
     conn.close()
-    logger.debug("DB save_message: role=%s content_chars=%s", role, len(content or ""))
+        logger.debug("DB save_message: role=%s session=%s task=%s", role, session_id, task_num)
 
-def load_messages():
-    """Loads all messages from the database."""
-    conn = sqlite3.connect(DB_PATH)
+    def load_messages(self, session_id: str = None):
+        """Loads messages, optionally filtering by session_id."""
+        conn = self.get_connection()
     c = conn.cursor()
-    c.execute("SELECT role, content, tool_calls, tool_call_id, sender FROM messages ORDER BY id")
+        if session_id:
+            c.execute("SELECT role, content, tool_calls, tool_call_id, sender, session_id, task_number FROM messages WHERE session_id = ? ORDER BY id", (session_id,))
+        else:
+            c.execute("SELECT role, content, tool_calls, tool_call_id, sender, session_id, task_number FROM messages ORDER BY id")
     rows = c.fetchall()
     conn.close()
-    
-    messages = []
-    for row in rows:
-        role, content, tool_calls_json, tool_call_id, sender = row
-        msg = {
-            "role": role,
-            "content": content,
-            "sender": sender,
-            "tool_call_id": tool_call_id
-        }
-        if tool_calls_json:
-            msg["tool_calls"] = json.loads(tool_calls_json)
-        messages.append(msg)
-    
-    logger.debug("DB load_messages: count=%s", len(messages))
-    return messages
+        return self._rows_to_dicts(rows)
 
-def get_active_step_description() -> str:
-    """Returns the description of the current active step."""
-    conn = sqlite3.connect(DB_PATH)
-    # Get the IN_PROGRESS step, or the first TODO step
-    df = pd.read_sql_query("SELECT description FROM plan WHERE status IN ('IN_PROGRESS', 'TODO') ORDER BY status ASC, step_number ASC LIMIT 1", conn)
+    def get_messages_for_task(self, session_id: str, task_number: int):
+        conn = self.get_connection()
+        c = conn.cursor()
+        c.execute(
+            "SELECT role, content, tool_calls, tool_call_id, sender, session_id, task_number FROM messages WHERE session_id = ? AND task_number = ? ORDER BY id", 
+            (session_id, task_number)
+        )
+        rows = c.fetchall()
     conn.close()
-    
-    if not df.empty:
-        return str(df.iloc[0]['description'])
-    return "No active research step found. Waiting for plan."
+        return self._rows_to_dicts(rows)
 
-def load_agent_window(limit: int = 10):
-    """
-    Loads a minimal context window:
-    1. The FIRST message (User Prompt)
-    2. The LAST N messages (Recent conversation history)
-    """
-    conn = sqlite3.connect(DB_PATH)
+    def get_last_n_messages(self, session_id: str, n: int):
+        conn = self.get_connection()
     c = conn.cursor()
-    
-    # 1. Get First Message (ID=1 usually, or just LIMIT 1)
-    c.execute("SELECT role, content, tool_calls, tool_call_id, sender FROM messages ORDER BY id ASC LIMIT 1")
-    first_row = c.fetchall()
-    
-    # 2. Get Last N Messages
-    # We use a subquery to order by ID desc first to get the last N, then re-order ASC
+        # Subquery to get last N then order ASC
     c.execute(f'''
-        SELECT role, content, tool_calls, tool_call_id, sender 
+            SELECT role, content, tool_calls, tool_call_id, sender, session_id, task_number 
         FROM (
-            SELECT role, content, tool_calls, tool_call_id, sender, id
-            FROM messages 
+                SELECT * FROM messages 
+                WHERE session_id = ?
             ORDER BY id DESC 
             LIMIT ?
         ) 
         ORDER BY id ASC
-    ''', (limit,))
-    last_rows = c.fetchall()
-    
+        ''', (session_id, n))
+        rows = c.fetchall()
     conn.close()
-    
-    # Combine and Deduplicate (if total messages < limit)
-    # We'll use a set of signatures (role+content+sender) or just handle list logic carefully
-    
-    all_rows = []
-    if first_row:
-        all_rows.extend(first_row)
-    
-    # If first_row is also in last_rows (short history), avoid duplicating
-    # Simple check: if len(last_rows) < limit, likely overlap might happen if total is small.
-    # But strictly speaking, if we just blindly append, we might duplicate the first message if it's also in the last N.
-    # Let's simple check:
-    
-    for r in last_rows:
-        if first_row and r == first_row[0]:
-            continue # Skip if it's the exact same row content as the first one
-        all_rows.append(r)
-        
+        return self._rows_to_dicts(rows)
+
+    def _rows_to_dicts(self, rows):
     messages = []
-    for row in all_rows:
-        role, content, tool_calls_json, tool_call_id, sender = row
+        for row in rows:
+            role, content, tool_calls_json, tool_call_id, sender, session_id, task_number = row
         msg = {
             "role": role,
             "content": content,
             "sender": sender,
-            "tool_call_id": tool_call_id
+                "tool_call_id": tool_call_id,
+                "session_id": session_id,
+                "task_number": task_number
         }
         if tool_calls_json:
             try:
@@ -317,43 +300,37 @@ def load_agent_window(limit: int = 10):
             except:
                 pass
         messages.append(msg)
-        
-    logger.debug("DB load_agent_window: count=%s", len(messages))
-    return messages
+        return messages
 
-def clear_messages():
-    """Clears all messages from the database."""
-    conn = sqlite3.connect(DB_PATH)
+    def get_initial_user_prompt(self, session_id: str = None) -> str | None:
+        conn = self.get_connection()
     c = conn.cursor()
-    c.execute("DELETE FROM messages")
-    conn.commit()
+        query = "SELECT content FROM messages WHERE role='user'"
+        params = []
+        if session_id:
+            query += " AND session_id=?"
+            params.append(session_id)
+        query += " ORDER BY id ASC LIMIT 1"
+        
+        c.execute(query, tuple(params))
+        row = c.fetchone()
     conn.close()
-    logger.debug("DB clear_messages done")
+        return str(row[0]) if row and row[0] else None
 
+    # --- Approvals ---
 
-def has_pending_approvals() -> bool:
-    """Returns True if there are terminal commands awaiting approval."""
-    conn = sqlite3.connect(DB_PATH)
+    def has_pending_approvals(self) -> bool:
+        conn = self.get_connection()
     c = conn.cursor()
     row = c.execute("SELECT COUNT(*) FROM approvals WHERE approved = 0").fetchone()
     conn.close()
     return bool(row[0]) if row else False
 
+    # --- UI Helpers ---
 
-def prune_messages_for_ui():
-    """
-    Reduce chat noise without breaking user-visible history.
-    Keeps:
-      - user messages
-      - assistant messages with non-empty content and without tool_calls
-      - system messages that look like errors (so UI can show failures)
-    Removes:
-      - tool messages
-      - assistant tool-call wrapper messages (tool_calls != NULL)
-      - empty assistant messages
-      - non-error system messages
-    """
-    conn = sqlite3.connect(DB_PATH)
+    def prune_messages_for_ui(self):
+        """Clean up database messages."""
+        conn = self.get_connection()
     c = conn.cursor()
     c.execute(
         """
@@ -373,115 +350,41 @@ def prune_messages_for_ui():
     )
     conn.commit()
     conn.close()
-    logger.debug("DB prune_messages_for_ui done")
 
+# Global Instance
+db = DatabaseManager()
 
-def get_initial_user_prompt() -> str | None:
-    """Returns the first user message content, if any."""
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute(
-        "SELECT content FROM messages WHERE role='user' ORDER BY id ASC LIMIT 1"
-    )
-    row = c.fetchone()
+# --- Backward Compatibility Wrappers (Proxies to db instance) ---
+
+def init_db(): db.init_db()
+def clear_db(): db.clear_db()
+def set_swarm_running(r): db.set_swarm_running(r)
+def is_swarm_running(): return db.is_swarm_running()
+def set_stop_signal(r): db.set_stop_signal(r)
+def should_stop(): return db.should_stop()
+def add_plan_step(d, n): db.add_plan_step(d, n)
+def get_next_step(): return db.get_next_step()
+def update_step_status(i, s, r=None): db.update_step_status(i, s, r)
+def get_all_plan(): return db.get_all_plan()
+def get_max_step_number(): return db.get_max_step_number()
+def get_existing_step_numbers(): return db.get_existing_step_numbers()
+def get_completed_steps_count(): return db.get_completed_steps_count()
+def get_done_results_text(): return db.get_done_results_text()
+def save_message(role, content, tool_calls=None, tool_call_id=None, sender=None, session_id="default"): 
+    # Notice updated signature to support session_id if passed, though old calls won't pass it.
+    db.save_message(role, content, tool_calls, tool_call_id, sender, session_id)
+def load_messages(session_id=None): return db.load_messages(session_id)
+def get_active_step_description():
+    # Helper to get description from plan based on status
+    df = db.get_all_plan()
+    if df.empty: return "Waiting for plan."
+    # Logic copied from original
+    conn = db.get_connection()
+    df = pd.read_sql_query("SELECT description FROM plan WHERE status IN ('IN_PROGRESS', 'TODO') ORDER BY status ASC, step_number ASC LIMIT 1", conn)
     conn.close()
-    if row and row[0]:
-        return str(row[0])
-    return None
-
-
-def load_successful_tool_outputs(executor_tools: set[str] = None) -> list[dict]:
-    """
-    Returns tool outputs that look successful (non-empty content, no obvious error markers).
-    executor_tools: optional set of tool names to whitelist; if None, accepts any tool.
-    """
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT role, content, tool_calls, tool_call_id, sender FROM messages ORDER BY id")
-    rows = c.fetchall()
-    conn.close()
-
-    msgs = []
-    for row in rows:
-        role, content, tool_calls_json, tool_call_id, sender = row
-        if role != "tool":
-            continue
-        if not content:
-            continue
-        # basic error markers
-        text = (content or "").lower()
-        if "error" in text or "invalid" in text or "denied" in text:
-            continue
-        tool_name = None
-        if tool_calls_json:
-            try:
-                tc_list = json.loads(tool_calls_json)
-                if isinstance(tc_list, list) and tc_list:
-                    fn = tc_list[0].get("function", {})
-                    tool_name = fn.get("name")
-            except Exception:
-                pass
-        if executor_tools and tool_name and tool_name not in executor_tools:
-            continue
-        msgs.append({
-            "role": role,
-            "content": content,
-            "tool_call_id": tool_call_id,
-            "sender": sender,
-            "tool_name": tool_name,
-        })
-    return msgs
-
-
-def build_step_blocks_from_tools() -> list[dict]:
-    """
-    Returns a list of step blocks with structure:
-    {
-      "step_number": int,
-      "goal": str,
-      "tool_results": [ { "tool": name, "output": str } ... ]
-    }
-    Only includes steps marked DONE/IN_PROGRESS/TODO (goal from plan.description),
-    and tool outputs from successful tool calls.
-    """
-    # Map step_id -> (step_number, description)
-    plan_df = get_all_plan()
-    step_map = {}
-    if plan_df is not None and not plan_df.empty:
-        for _, row in plan_df.iterrows():
-            step_map[row["id"]] = {
-                "step_number": row["step_number"],
-                "description": row["description"],
-            }
-
-    tool_msgs = load_successful_tool_outputs(
-        executor_tools={"web_search", "read_file", "execute_terminal_command", "answer_from_knowledge"}
-    )
-
-    # We don’t store step_id in tool rows; infer from last get_current_plan_step before the tool?
-    # As a fallback, group all tools into one list; we can’t reliably map to step_id without schema.
-    # So we produce a single synthetic step “Unknown/Current” if mapping fails.
-    # If step_map is present, just attach all tools under the highest IN_PROGRESS or DONE.
-
-    blocks = []
-    # choose active step if exists
-    active = get_next_step()
-    active_id = active["id"] if active is not None else None
-    active_step_number = active["step_number"] if active is not None else None
-    active_desc = active["description"] if active is not None else "Current active task"
-
-    # Group all tool outputs into a single block for now (schema lacks step_id link)
-    if tool_msgs:
-        block = {
-            "step_number": active_step_number or "N/A",
-            "goal": active_desc,
-            "tool_results": [],
-        }
-        for tm in tool_msgs:
-            block["tool_results"].append({
-                "tool": tm.get("tool_name") or "tool",
-                "output": tm.get("content") or "",
-            })
-        blocks.append(block)
-
-    return blocks
+    if not df.empty: return str(df.iloc[0]['description'])
+    return "No active research step."
+def get_initial_user_prompt(session_id=None): return db.get_initial_user_prompt(session_id)
+def has_pending_approvals(): return db.has_pending_approvals()
+def prune_messages_for_ui(): db.prune_messages_for_ui()
+def load_agent_window(limit=10): return db.get_last_n_messages("default", limit) # Approximate mapping

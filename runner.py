@@ -1,14 +1,19 @@
 import threading
 import logging
+import time
 from typing import Optional
 from agents import Runner, Agent, RunConfig, ModelSettings
 from agents.exceptions import ModelBehaviorError
 from openai import BadRequestError
 from agents.models.openai_provider import OpenAIProvider
-import database
+from database import db
 from db_session import DBSession
 from config import MAX_TURNS, OPENAI_API_KEY, OPENAI_BASE_URL, MAX_RETRIES
-from research_agents import get_agent_by_name
+
+# Delayed import to avoid circular dependency issues if possible, 
+# or ensure research_agents imports database/tools safely.
+# Assuming research_agents is importable.
+from research_agents import get_agent_by_name, planner_agent, executor_agent, reporter_agent
 
 logger = logging.getLogger(__name__)
 
@@ -16,51 +21,27 @@ class SwarmRunner:
     def __init__(self):
         self.thread: Optional[threading.Thread] = None
 
-    def run_in_background(self, agent: Agent, input_text: str, max_turns: int = MAX_TURNS):
+    def run_in_background(self, start_agent: Agent, input_text: str, max_turns: int = MAX_TURNS):
         """Starts the swarm execution in a background thread."""
-        if database.is_swarm_running():
+        if db.is_swarm_running():
             logger.warning("Swarm is already running. Cannot start another instance.")
             return
 
-        database.set_swarm_running(True)
-        database.set_stop_signal(False)
+        db.set_swarm_running(True)
+        db.set_stop_signal(False)
         
         self.thread = threading.Thread(
             target=self._run_wrapper,
-            args=(agent, input_text, max_turns),
+            args=(start_agent, input_text, max_turns),
             daemon=True
         )
         self.thread.start()
         logger.info("Swarm background thread started with max_turns=%d", max_turns)
 
-    def _run_wrapper(self, agent: Agent, input_text: str, max_turns: int):
-        """Wrapper to run the synchronous Runner in a thread."""
-        def _resolve_last_agent_fallback(default_agent: Agent) -> Agent:
-            """
-            Resolves the last active agent from:
-            1) Parsed error text (handled in except blocks)
-            2) DB history: last assistant message with sender
-            Fallbacks to the provided default_agent.
-            """
-            try:
-                messages = database.load_messages()
-                for m in reversed(messages):
-                    if m.get("role") == "assistant" and m.get("sender"):
-                        resolved = get_agent_by_name(m.get("sender"))
-                        if resolved:
-                            return resolved
-            except Exception as err:
-                logger.warning("Failed to resolve last agent from DB: %s", err)
-            return default_agent
+    def _run_wrapper(self, start_agent: Agent, input_text: str, max_turns: int):
+        """Wrapper to run the synchronous Runner in a thread with Phase management."""
 
-        try:
-            logger.info("Starting Runner.run_sync with input length: %s", len(input_text) if input_text else 0)
-            
-            # Create the session adapter
-            session = DBSession()
-
-            # Standard OpenAI Configuration without vLLM hacks
-            # Note: We only set global defaults here. Individual agent settings will take precedence.
+        # Standard OpenAI Configuration
             run_config = RunConfig(
                 model_provider=OpenAIProvider(
                     api_key=OPENAI_API_KEY,
@@ -68,115 +49,130 @@ class SwarmRunner:
                 ),
                 tracing_disabled=True,
                 model_settings=ModelSettings(
-                    temperature=0.0,  # Critical: deterministic tool calling
-                    parallel_tool_calls=False,  # Critical: prevent parallel tool calls
+                temperature=0.0,
+                parallel_tool_calls=False,
                     tool_choice="auto",
                 ),
             )
 
-            retry_count = 0
-            current_agent = agent
+        try:
+            current_agent = start_agent
+            current_input = input_text
+            
+            # --- PHASE 1: PLANNING ---
+            if current_phase_is_planner(current_agent):
+                logger.info("=== PHASE 1: PLANNING ===")
+                session = DBSession("planner_init")
+                
+                # Execute Planner
+                # We expect Planner to add steps and then finish (return text or stop).
+                # Logic: Planner runs, calls add_steps_to_plan, then should output "Plan created" and stop.
+                _execute_phase(current_agent, current_input, session, max_turns, run_config)
+                
+                # Transition to Execution
+                current_agent = executor_agent
+                current_input = "Plan created. Begin execution of the first step."
+
+            # --- PHASE 2: EXECUTION ---
+            # This loop continues as long as there are steps to do.
+            # Executor, Evaluator, Strategist run in the same 'main_research' session.
+            if current_phase_is_executor(current_agent):
+                logger.info("=== PHASE 2: EXECUTION ===")
+                session = DBSession("main_research")
+                
+                while True:
+                    if db.should_stop():
+                        logger.info("Stop signal received in Execution Phase.")
+                        break
+                        
+                    next_step = db.get_next_step()
+                    if next_step is None:
+                        logger.info("No more steps (TODO/IN_PROGRESS). Execution Phase Complete.")
+                        break
+                        
+                    logger.info(f"Starting execution for Step {next_step['step_number']}: {next_step['description']}")
+                    
+                    # Update input to focus on current step
+                    # Note: We rely on Task-Scoped Memory in DBSession to filter history.
+                    # We inject a specific trigger for the agent.
+                    step_input = f"Execute Step {next_step['step_number']}: {next_step['description']}"
+                    if current_input:
+                        step_input = f"{current_input}\n{step_input}"
+                        current_input = None # Clear after first use
+                    
+                    # Run the swarm for this step.
+                    # It returns when the agent chain finishes (e.g. Evaluator says "Step Done").
+                    # If the agents loop forever, max_turns will catch them.
+                    _execute_phase(current_agent, step_input, session, max_turns, run_config)
+                    
+                    # Check if we should continue
+                    # If the step is still IN_PROGRESS/TODO after the run, something might be wrong,
+                    # or max_turns was hit. The loop will retry or pick it up again.
+                    pass
+                
+                # Transition to Reporting
+                current_agent = reporter_agent
+                current_input = "All steps completed. Generate the final report."
+
+            # --- PHASE 3: REPORTING ---
+            if current_phase_is_reporter(current_agent):
+                logger.info("=== PHASE 3: REPORTING ===")
+                session = DBSession("reporter_flow")
+                _execute_phase(current_agent, current_input, session, max_turns, run_config)
+
+        except Exception as e:
+            logger.exception("Unexpected error in swarm background thread: %s", e)
+            db.save_message("system", f"Error in background runner: {str(e)}")
+
+        finally:
+            db.set_swarm_running(False)
+            logger.info("Swarm background thread finished.")
+
+def current_phase_is_planner(agent: Agent) -> bool:
+    return agent.name == "Planner"
+
+def current_phase_is_executor(agent: Agent) -> bool:
+    return agent.name in ["Executor", "Evaluator", "Strategist"]
+
+def current_phase_is_reporter(agent: Agent) -> bool:
+    return agent.name == "Reporter"
+
+def _execute_phase(agent: Agent, input_text: str, session: DBSession, max_turns: int, run_config: RunConfig):
+    """Helper to run a single phase with retry logic."""
+    retry_count = 0
             current_input = input_text
 
             while retry_count <= MAX_RETRIES:
+        if db.should_stop():
+            return
+
                 try:
-                    logger.info("Running swarm attempt %s with agent=%s max_turns=%s", retry_count + 1, current_agent.name, max_turns)
+            logger.info("Runner: Starting run with agent=%s session=%s", agent.name, session.session_id)
                     result = Runner.run_sync(
-                        current_agent,
+                agent,
                         input=current_input,
                         session=session,
                         max_turns=max_turns,
                         run_config=run_config,
                     )
-                    final_len = len(result.final_output) if result.final_output else 0
-                    logger.info("Runner finished. Final output chars: %s", final_len)
-
-                    # Post-run guard: if plan still has TODO/IN_PROGRESS and final output is empty/very short,
-                    # treat as abnormal completion and retry with feedback (if retries remain).
-                    try:
-                        plan_df = database.get_all_plan()
-                        pending_df = plan_df[plan_df["status"].isin(["TODO", "IN_PROGRESS"])]
-                    except Exception as err:
-                        pending_df = None
-                        logger.warning("Post-run guard: failed to load plan status: %s", err)
-
-                    if pending_df is not None and not pending_df.empty and final_len < 5 and retry_count < MAX_RETRIES:
-                        retry_count += 1
-                        feedback = (
-                            "SYSTEM FEEDBACK: No tool was called or output was empty while tasks remain. "
-                            "You must call an allowed tool (or handoff) to proceed."
-                        )
-                        database.save_message("system", feedback)
-                        logger.warning(
-                            "Post-run guard triggered (attempt %s/%s). Pending steps remain. Injecting feedback and retrying.",
-                            retry_count, MAX_RETRIES
-                        )
-                        # Keep current_agent; set a minimal input to nudge continuation
-                        current_input = "Please continue and call an allowed tool for the active task."
-                        continue
-
-                    # Normal completion
-                    break
+            # If successful, we return. The logic outside determines next steps.
+            return result
 
                 except ModelBehaviorError as mbe:
                     retry_count += 1
-                    error_msg = str(mbe)
-                    logger.warning("ModelBehaviorError caught (attempt %s/%s): %s", retry_count, MAX_RETRIES, error_msg)
-
-                    failed_agent = None
-                    # Try parse agent name from error text
-                    if "in agent" in error_msg:
-                        import re
-                        match = re.search(r"in agent (\\w+)", error_msg)
-                        if match:
-                            failed_agent = get_agent_by_name(match.group(1))
-
-                    if not failed_agent:
-                        failed_agent = _resolve_last_agent_fallback(current_agent)
-
-                    # Prepare feedback
-                    feedback = (
-                        "SYSTEM FEEDBACK: Previous turn failed. "
-                        "Likely cause: invalid or missing tool call. "
-                        f"Error: {error_msg}. "
-                        "Use only your allowed tools and continue."
-                    )
-                    database.save_message("system", feedback)
-                    logger.warning("Injecting feedback to agent %s: %s", failed_agent.name if failed_agent else "UNKNOWN", feedback)
-
-                    current_agent = failed_agent or current_agent
-                    current_input = "Please continue after fixing the previous tool-call error."
-
-                    if retry_count >= MAX_RETRIES:
-                        logger.error("Max retries reached for ModelBehaviorError.")
-                        database.save_message("system", "Critical: Max retries reached for behavior errors.")
-                        break
+            logger.warning("ModelBehaviorError (attempt %s): %s", retry_count, mbe)
+            db.save_message("system", f"System Feedback: {str(mbe)}", session_id=session.session_id)
+            current_input = "Please fix the previous error and continue."
 
                 except BadRequestError as bre:
                     retry_count += 1
-                    error_msg = str(bre)
-                    logger.warning("BadRequestError caught (attempt %s/%s): %s", retry_count, MAX_RETRIES, error_msg)
-
-                    feedback = (
-                        "SYSTEM FEEDBACK: Request failed due to context length or bad request. "
-                        f"Error: {error_msg}. Reduce output/context and continue."
-                    )
-                    database.save_message("system", feedback)
-                    logger.warning("Injecting feedback due to BadRequestError: %s", feedback)
-
-                    if retry_count >= MAX_RETRIES:
-                        logger.error("Max retries reached for BadRequestError.")
-                        database.save_message("system", "Critical: Max retries reached for request errors.")
-                        break
+            logger.warning("BadRequestError (attempt %s): %s", retry_count, bre)
+            db.save_message("system", f"System Feedback: {str(bre)}", session_id=session.session_id)
+            current_input = "Reduce output length and continue."
 
                 except Exception as e:
-                    logger.exception("Unexpected error in swarm background thread: %s", e)
-                    database.save_message("system", f"Error in background runner: {str(e)}")
-                    break
-
-        finally:
-            database.set_swarm_running(False)
-            logger.info("Swarm background thread finished.")
+            logger.exception("Critical error in _execute_phase: %s", e)
+            raise e
 
 # Global instance
 runner = SwarmRunner()

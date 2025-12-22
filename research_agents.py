@@ -9,9 +9,8 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 # --- Agent Definitions ---
-# Defined in topological order (mostly) to allow constructor handoffs.
 
-# 1. REPORTER (No dependencies)
+# 1. REPORTER
 reporter_agent = Agent(
     name="Reporter",
     model=MODEL,
@@ -19,25 +18,25 @@ reporter_agent = Agent(
 You are the Reporter. Your goal is to create the final research summary.
 
 CRITICAL RULES:
-1. Use EXACT tool names without any suffixes or special characters.
-2. Available tools: get_completed_research_context
+1. Use EXACT tool names without any suffixes.
+2. Available tools: get_research_summary
 
 WORKFLOW:
-1. First turn: Call `get_completed_research_context` (exact name, no arguments).
-2. Second turn: Write a comprehensive Markdown report based on the findings.
-3. Output the report text directly in the chat (this is the ONLY agent that should output text).
+1. First turn: Call `get_research_summary` (exact name, no arguments).
+2. Second turn: Write a comprehensive Markdown report based on the findings provided by the tool.
+3. Output the report text directly.
 
-FORBIDDEN: Never add suffixes like <|channel|> to tool names.
+FORBIDDEN: Do not add suffixes like <|channel|> to tool names.
 """,
-    tools=[tools.get_completed_research_context],
-    handoffs=[],
+    tools=[tools.get_research_summary],
+    handoffs=[], # No handoffs, Runner handles completion
     model_settings=ModelSettings(
         parallel_tool_calls=False,
         tool_choice="auto"
     )
 )
 
-# 2. EXECUTOR (Depends on Evaluator, Reporter. Evaluator not ready yet.)
+# 2. EXECUTOR
 executor_agent = Agent(
     name="Executor",
     model=MODEL,
@@ -45,19 +44,18 @@ executor_agent = Agent(
 You are the Executor. Your goal is to perform research steps.
 
 CRITICAL RULES:
-1. Use EXACT tool names without any suffixes or special characters.
-2. Call EXACTLY ONE tool per turn. Never call multiple tools simultaneously.
+1. Use EXACT tool names.
+2. Call EXACTLY ONE tool per turn.
 3. Available tools: get_current_plan_step, web_search, read_file, execute_terminal_command, answer_from_knowledge
 4. RESTRICTION: Do NOT use `read_file` unless the task explicitly asks to read a specific local file. Default to `web_search`.
-5. You MUST call a tool every turn. Never finish without a tool call.
 
 WORKFLOW:
-1. ALWAYS start by calling `get_current_plan_step` (no arguments) to see your task. Do this IMMEDIATELY upon receiving control.
-2. If it returns "NO_MORE_STEPS", hand off to Reporter.
-3. Otherwise, use ONE research tool (web_search/read_file/execute_terminal_command) to gather information.
-4. After gathering enough information, hand off to Evaluator.
+1. ALWAYS start by calling `get_current_plan_step`.
+2. If it returns "NO_MORE_STEPS": Output "Research Complete".
+3. Otherwise, use research tools to gather information.
+4. When you have enough information for the CURRENT step, hand off to Evaluator.
 
-FORBIDDEN: Never call multiple tools at once. Never output text. Never add suffixes like <|channel|>.
+FORBIDDEN: Never output text unless finishing.
 """,
     tools=[
         tools.get_current_plan_step,
@@ -66,40 +64,40 @@ FORBIDDEN: Never call multiple tools at once. Never output text. Never add suffi
         tools.execute_terminal_command,
         tools.answer_from_knowledge,
     ],
-    handoffs=[handoff(reporter_agent)], # Evaluator added later
+    handoffs=[handoff(reporter_agent)], # Will be updated with Evaluator below
     model_settings=ModelSettings(
         parallel_tool_calls=False,
         tool_choice="required"
     )
 )
 
-# 3. STRATEGIST (Depends on Executor)
+# 3. STRATEGIST
 strategist_agent = Agent(
     name="Strategist",
     model=MODEL,
     instructions=f"""{RECOMMENDED_PROMPT_PREFIX}
-You are the Strategist. Your goal is to recover from failed research steps by modifying the plan.
-You are only called when a step has FAILED.
+You are the Strategist. Your goal is to recover from failed research steps.
 
 CRITICAL RULES:
 1. You MUST call `add_steps_to_plan` to add corrective actions.
-2. Use EXACT tool names without any suffixes or special characters.
-3. Call EXACTLY ONE tool per turn.
-4. DO NOT OUTPUT PLAIN TEXT OR COMMENTARY. ONLY CALL TOOLS.
+2. Use EXACT tool names.
 
 WORKFLOW:
-1. Analyze the conversation history to see why the step failed.
-2. Call `add_steps_to_plan` with new, specific steps to address the failure (e.g., "1. Try searching for X instead of Y").
-3. After the tool call succeeds, in the next turn, hand off to Executor.
+1. Analyze the context (the system will provide the failure details).
+2. Call `add_steps_to_plan` with specific corrective steps.
+3. In the next turn, hand off to Executor to try again.
 
-Available tools: add_steps_to_plan
+Available tools: add_steps_to_plan, get_recovery_context
 """,
-    tools=[tools.add_steps_to_plan],
+    tools=[
+        tools.add_steps_to_plan,
+        tools.get_recovery_context
+    ],
     handoffs=[handoff(executor_agent)],
     model_settings=ModelSettings(parallel_tool_calls=False, tool_choice="required")
 )
 
-# 4. EVALUATOR (Depends on Executor, Strategist)
+# 4. EVALUATOR
 evaluator_agent = Agent(
     name="Evaluator",
     model=MODEL,
@@ -107,26 +105,23 @@ evaluator_agent = Agent(
 You are the QA Evaluator. You validate research findings.
 
 CRITICAL RULES:
-1. Use EXACT tool names without any suffixes or special characters.
-2. Call EXACTLY ONE tool per turn.
-3. Available tools: get_current_plan_step, submit_step_result, mark_step_failed
-4. You MUST call one of the allowed tools each turn. Never finish without a tool call.
+1. Use EXACT tool names.
+2. Available tools: submit_step_result, mark_step_failed
 
 WORKFLOW:
-FIRST TURN:
-- Analyze the latest tool outputs (from Executor).
-- If the data contains RELEVANT information for the current step: call `submit_step_result` with step_id and a summary of the findings.
-- If the data is irrelevant, empty, or an error: call `mark_step_failed` with step_id and a specific error message explanation.
-- Do NOT call other tools in the same turn.
+1. Analyze the latest tool outputs from Executor.
+2. DECISION:
+   - IF VALID: 
+     a) Call `submit_step_result` with the step_id and findings.
+     b) THEN (next turn): Output "Step Verified" to finish the step.
+   - IF FAILED/EMPTY: 
+     a) Call `mark_step_failed` with the error.
+     b) THEN (next turn): Hand off to Strategist.
 
-SECOND TURN (after decision is saved):
-- If you submitted results: hand off to Executor (for next step).
-- If you marked failed: hand off to Strategist (for recovery).
-
-FORBIDDEN: Never call multiple tools at once. Never output text. Never add suffixes like <|channel|>.
+FORBIDDEN: Do not output text UNLESS the step is valid and you are finishing.
 """,
     tools=[
-        tools.get_current_plan_step,
+        tools.get_current_plan_step, # Useful to confirm ID
         tools.submit_step_result,
         tools.mark_step_failed,
     ],
@@ -134,7 +129,7 @@ FORBIDDEN: Never call multiple tools at once. Never output text. Never add suffi
     model_settings=ModelSettings(parallel_tool_calls=False, tool_choice="required")
 )
 
-# 5. PLANNER (Depends on Executor)
+# 5. PLANNER
 planner_agent = Agent(
     name="Planner",
     model=MODEL,
@@ -142,35 +137,28 @@ planner_agent = Agent(
 You are the Lead Planner. Your ONLY job is to create a research plan.
 
 CRITICAL RULES:
-1. Use EXACT tool names without any suffixes, prefixes, or special characters.
-2. Call EXACTLY ONE tool per turn. Never call multiple tools simultaneously.
+1. Use EXACT tool names.
+2. Call EXACTLY ONE tool per turn.
 3. Available tools: add_steps_to_plan
 
 WORKFLOW:
-FIRST TURN:
-- Call `add_steps_to_plan` with a list of 3-5 research tasks as strings.
-- Each task must start with a number like "1. Task description"
-- Do NOT call any other tools in the same turn.
-- Do NOT output any text or JSON.
+1. Call `add_steps_to_plan` with a list of 3-5 research tasks.
+2. In the next turn, output "Plan Created".
 
-SECOND TURN (after add_steps_to_plan succeeds):
-- Call the handoff tool to transfer to Executor.
-- Do NOT call any other tools.
-- Do NOT output any text.
-
-FORBIDDEN: Do NOT add commentary, suffixes like <|channel|>, or any text output.
+FORBIDDEN: Do not hand off. Do not add commentary.
 """,
     tools=[tools.add_steps_to_plan],
-    handoffs=[handoff(executor_agent)],
+    handoffs=[], # No handoffs, returns to Runner
     model_settings=ModelSettings(
         parallel_tool_calls=False,
-        tool_choice="required"
+        tool_choice="auto" # Can output text
     )
 )
 
 # --- Post-Init Updates ---
 # Close the circular dependency loop for Executor -> Evaluator
-executor_agent.handoffs.append(handoff(evaluator_agent))
+# Also remove Reporter handoff from Executor (it was placeholder)
+executor_agent.handoffs = [handoff(evaluator_agent)]
 
 # --- Helper: resolve agent by name (for recovery logic) ---
 _AGENT_MAP = {

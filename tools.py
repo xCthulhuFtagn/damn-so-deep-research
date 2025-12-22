@@ -8,7 +8,7 @@ import json
 from typing import List, Dict, Any, Optional
 from ddgs import DDGS
 from config import DB_PATH
-import database
+from database import db
 from logging_setup import setup_logging
 from agents import function_tool
 
@@ -28,8 +28,19 @@ def web_search(query: str) -> str:
     logger.info("web_search: query=%s", query)
     try:
         results = DDGS().text(query, max_results=3)
-        logger.debug("web_search: ok")
-        return str(results)
+        
+        # Convert list of dicts to a formatted string
+        text_output = ""
+        for i, res in enumerate(results, 1):
+            title = res.get('title', 'No Title')
+            body = res.get('body', '')
+            href = res.get('href', '')
+            text_output += f"[{i}] {title}\nLink: {href}\nSummary: {body}\n\n"
+            
+        logger.debug("web_search: ok, raw length=%s", len(text_output))
+            
+        return text_output
+        
     except Exception as e:
         logger.exception("web_search failed")
         return f"Error searching: {e}"
@@ -68,7 +79,7 @@ def execute_terminal_command(command: str) -> str:
     logger.info("execute_terminal_command: requested hash=%s cmd=%s", cmd_hash, command)
     
     # 1. Check existing approval or create request
-    conn = sqlite3.connect(DB_PATH)
+    conn = db.get_connection()
     c = conn.cursor()
     row = c.execute("SELECT approved FROM approvals WHERE command_hash = ?", (cmd_hash,)).fetchone()
     
@@ -86,7 +97,7 @@ def execute_terminal_command(command: str) -> str:
     waited = 0
     
     while status == 0:
-        if database.should_stop():
+        if db.should_stop():
             logger.info("execute_terminal_command: stop signal received")
             return "Execution stopped by user signal."
             
@@ -96,7 +107,7 @@ def execute_terminal_command(command: str) -> str:
             logger.info("Waiting for approval... hash=%s time=%ds", cmd_hash, waited)
             
         # Re-check status
-        conn = sqlite3.connect(DB_PATH)
+        conn = db.get_connection()
         c = conn.cursor()
         r = c.execute("SELECT approved FROM approvals WHERE command_hash = ?", (cmd_hash,)).fetchone()
         conn.close()
@@ -175,16 +186,15 @@ def add_steps_to_plan(steps: List[str]) -> str:
                 steps_list = [f"{num}. {txt.strip()}" for num, txt in parts if (txt or "").strip()]
 
     count = 0
-    # Offset-from-max dedupe policy: if a parsed step number already exists, assign max+1.
-    existing_nums = database.get_existing_step_numbers()
-    max_num = database.get_max_step_number()
+    # Offset-from-max dedupe policy
+    existing_nums = db.get_existing_step_numbers()
+    max_num = db.get_max_step_number()
     used_nums = set(existing_nums)
 
     for line in steps_list:
         line = line.strip()
         if not line: continue
             
-        # Улучшенный парсинг: ищем число в начале строки
         import re
         match = re.match(r'^(\d+)[\.\)]\s*(.*)', line)
         try:
@@ -192,7 +202,6 @@ def add_steps_to_plan(steps: List[str]) -> str:
                 step_num = int(match.group(1))
                 desc = match.group(2).strip()
             else:
-                # If numbering is missing, treat the whole line as the description.
                 step_num = None
                 desc = line
 
@@ -202,12 +211,11 @@ def add_steps_to_plan(steps: List[str]) -> str:
             if step_num is None or step_num in used_nums:
                 step_num = max_num + 1
 
-            # Update max (in case model provides a large non-duplicate number)
             if step_num > max_num:
                 max_num = step_num
 
             used_nums.add(step_num)
-            database.add_plan_step(desc, step_num)
+            db.add_plan_step(desc, step_num)
             count += 1
         except Exception as e:
             logger.error("Failed to add step line '%s': %s", line, e)
@@ -219,24 +227,31 @@ def add_steps_to_plan(steps: List[str]) -> str:
 def get_current_plan_step() -> str:
     """
     Возвращает текущую активную задачу из плана.
+    Также устанавливает глобальный активный шаг в системе для контекста.
     ЭТОТ ИНСТРУМЕНТ НЕ ПРИНИМАЕТ АРГУМЕНТОВ.
     """
     logger.info("get_current_plan_step called")
-    step = database.get_next_step()
+    step = db.get_next_step()
     if step is None:
         logger.info("get_current_plan_step: NO_MORE_STEPS")
+        db.set_active_task(None)
         return "NO_MORE_STEPS"
+    
+    # Set global active task so all subsequent messages are tagged with this task number
+    db.set_active_task(int(step["step_number"]))
+    
     logger.info("get_current_plan_step: step_id=%s step_number=%s", step["id"], step["step_number"])
     return f"Current Step ID: {step['id']}, Step Number: {step['step_number']}, Task: {step['description']}"
 
 @function_tool
-def get_completed_research_context() -> str:
+def get_research_summary() -> str:
     """
-    Возвращает список всех уже выполненных шагов и их результаты.
+    Возвращает структурированный список всех уже выполненных шагов и их результаты.
+    Используется для составления финального отчета.
     ЭТОТ ИНСТРУМЕНТ НЕ ПРИНИМАЕТ АРГУМЕНТОВ.
     """
-    logger.debug("get_completed_research_context called")
-    return database.get_done_results_text()
+    logger.debug("get_research_summary called")
+    return db.get_done_results_text()
 
 @function_tool
 def submit_step_result(step_id: int, result_text: str) -> str:
@@ -248,7 +263,9 @@ def submit_step_result(step_id: int, result_text: str) -> str:
         result_text (str): Текст с результатами исследования.
     """
     logger.info("submit_step_result: step_id=%s result_chars=%s", step_id, len(result_text or ""))
-    database.update_step_status(step_id, "DONE", result_text)
+    db.update_step_status(step_id, "DONE", result_text)
+    # Clear active task as we are done
+    db.set_active_task(None)
     return "Result saved to Database. Step marked as DONE."
 
 @function_tool
@@ -261,5 +278,40 @@ def mark_step_failed(step_id: int, error_msg: str) -> str:
         error_msg (str): Причина провала.
     """
     logger.warning("mark_step_failed: step_id=%s error_chars=%s", step_id, len(error_msg or ""))
-    database.update_step_status(step_id, "FAILED", error_msg)
+    db.update_step_status(step_id, "FAILED", error_msg)
+    # Do NOT clear active task here, so Strategist can still see the context of this failed task
     return "Step marked as FAILED."
+
+@function_tool
+def get_recovery_context() -> str:
+    """
+    Возвращает контекст для восстановления: исходный запрос + план + детали провала.
+    Для использования Стратегом.
+    """
+    # 1. User Prompt
+    prompt = db.get_initial_user_prompt() or "N/A"
+    
+    # 2. Plan Status
+    plan = db.get_plan_summary()
+    
+    # 3. Active (Failed) Step Details
+    active_task = db.get_active_task()
+    failed_context = ""
+    if active_task:
+        # Get messages for this task
+        # We assume we are in 'main_research' session usually
+        msgs = db.get_messages_for_task("main_research", active_task)
+        # Extract last few messages as "Error Context"
+        # Or just return a summary saying "Step X failed"
+        failed_context = f"Step {active_task} logs:\n"
+        for m in msgs[-5:]:
+             failed_context += f"{m['role']}: {m['content'][:200]}...\n"
+    
+    return f"""RECOVERY CONTEXT:
+Original Request: {prompt}
+Plan Status:
+{plan}
+
+Failed Step Context:
+{failed_context}
+"""

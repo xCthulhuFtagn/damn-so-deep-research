@@ -16,24 +16,6 @@ import time
 setup_logging()
 logger = logging.getLogger(__name__)
 
-import streamlit as st
-import sqlite3
-import pandas as pd
-import logging
-import re
-import json
-
-from logging_setup import setup_logging
-from research_agents import planner_agent, executor_agent
-import database
-from runner import runner
-from config import DB_NAME, MAX_TURNS, DB_PATH
-import time
-
-# Configure logging as early as possible (Streamlit reruns safe)
-setup_logging()
-logger = logging.getLogger(__name__)
-
 # --- MONKEY PATCH START (V4 - Aggressive Early Interception) ---
 from agents import _run_impl
 import re
@@ -351,10 +333,28 @@ for msg in st.session_state.messages:
     role = msg["role"] if msg["role"] in ("user", "assistant") else "assistant"
     sender = (msg.get("sender") or "").strip() if role == "assistant" else ""
     content = msg.get("content") or ""
+    
+    # Extract session and task context if available
+    session_id = msg.get("session_id")
+    task_num = msg.get("task_number")
 
     with st.chat_message(role):
+        header = ""
         if sender:
-            st.markdown(f"**{sender}**")
+            header += f"**{sender}** "
+        
+        # Add visual context indicators
+        meta = []
+        if session_id and session_id != 'default':
+            meta.append(f"`[{session_id}]`")
+        if task_num:
+            meta.append(f"`(Task {task_num})`")
+            
+        if meta:
+            header += " ".join(meta)
+            
+        if header:
+            st.markdown(header)
         st.markdown(content)
 
 # --- Logic for Running Swarm ---
