@@ -42,18 +42,18 @@ class SwarmRunner:
         """Wrapper to run the synchronous Runner in a thread with Phase management."""
 
         # Standard OpenAI Configuration
-            run_config = RunConfig(
-                model_provider=OpenAIProvider(
-                    api_key=OPENAI_API_KEY,
-                    base_url=OPENAI_BASE_URL
-                ),
-                tracing_disabled=True,
-                model_settings=ModelSettings(
-                temperature=0.0,
-                parallel_tool_calls=False,
-                    tool_choice="auto",
-                ),
-            )
+        run_config = RunConfig(
+            model_provider=OpenAIProvider(
+                api_key=OPENAI_API_KEY,
+                base_url=OPENAI_BASE_URL
+            ),
+            tracing_disabled=True,
+            model_settings=ModelSettings(
+            temperature=0.0,
+            parallel_tool_calls=False,
+                tool_choice="auto",
+            ),
+        )
 
         try:
             current_agent = start_agent
@@ -140,37 +140,35 @@ def current_phase_is_reporter(agent: Agent) -> bool:
 def _execute_phase(agent: Agent, input_text: str, session: DBSession, max_turns: int, run_config: RunConfig):
     """Helper to run a single phase with retry logic."""
     retry_count = 0
-            current_input = input_text
+    current_input = input_text
 
-            while retry_count <= MAX_RETRIES:
+    while retry_count <= MAX_RETRIES:
         if db.should_stop():
             return
 
-                try:
+        try:
             logger.info("Runner: Starting run with agent=%s session=%s", agent.name, session.session_id)
-                    result = Runner.run_sync(
+            result = Runner.run_sync(
                 agent,
-                        input=current_input,
-                        session=session,
-                        max_turns=max_turns,
-                        run_config=run_config,
-                    )
+                input=current_input,
+                session=session,
+                max_turns=max_turns,
+                run_config=run_config,
+            )
             # If successful, we return. The logic outside determines next steps.
             return result
 
-                except ModelBehaviorError as mbe:
-                    retry_count += 1
+        except ModelBehaviorError as mbe:
+            retry_count += 1
             logger.warning("ModelBehaviorError (attempt %s): %s", retry_count, mbe)
             db.save_message("system", f"System Feedback: {str(mbe)}", session_id=session.session_id)
             current_input = "Please fix the previous error and continue."
-
-                except BadRequestError as bre:
-                    retry_count += 1
+        except BadRequestError as bre:
+            retry_count += 1
             logger.warning("BadRequestError (attempt %s): %s", retry_count, bre)
             db.save_message("system", f"System Feedback: {str(bre)}", session_id=session.session_id)
             current_input = "Reduce output length and continue."
-
-                except Exception as e:
+        except Exception as e:
             logger.exception("Critical error in _execute_phase: %s", e)
             raise e
 
