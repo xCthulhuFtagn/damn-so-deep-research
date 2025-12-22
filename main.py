@@ -9,7 +9,7 @@ from logging_setup import setup_logging
 from research_agents import planner_agent, executor_agent
 import database
 from runner import runner
-from config import DB_NAME, MAX_TURNS, DB_PATH
+from config import DB_PATH, MAX_TURNS
 import time
 
 # Configure logging as early as possible (Streamlit reruns safe)
@@ -234,8 +234,7 @@ else:
     if st.sidebar.button("Reset Research"):
         logger.info("User requested reset: clearing DB and UI state")
         database.clear_db()
-        st.session_state.messages = []
-        st.session_state.done_steps_count = 0
+        st.session_state.clear()
         st.rerun()
 
 # Отображение плана
@@ -271,7 +270,7 @@ render_plan()
 # Одобрение команд терминала
 st.sidebar.subheader("🛡️ Security Approvals")
 try:
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(DB_PATH)
     approvals = pd.read_sql_query("SELECT * FROM approvals WHERE approved = 0", conn)
     conn.close()
     logger.debug("Loaded pending approvals: count=%s", len(approvals))
@@ -286,14 +285,14 @@ if not approvals.empty:
         c1, c2 = st.sidebar.columns(2)
         if c1.button("✅ Approve", key=f"y_{row['command_hash']}"):
             logger.info("Approved terminal command: hash=%s", row["command_hash"])
-            c = sqlite3.connect(DB_NAME)
+            c = sqlite3.connect(DB_PATH)
             c.execute("UPDATE approvals SET approved=1 WHERE command_hash=?", (row['command_hash'],))
             c.commit()
             c.close()
             st.rerun()
         if c2.button("❌ Deny", key=f"n_{row['command_hash']}"):
             logger.info("Denied terminal command: hash=%s", row["command_hash"])
-            c = sqlite3.connect(DB_NAME)
+            c = sqlite3.connect(DB_PATH)
             # Use -1 as a sentinel for denied (SQLite doesn't enforce BOOLEAN strictly)
             c.execute("UPDATE approvals SET approved=-1 WHERE command_hash=?", (row['command_hash'],))
             c.commit()

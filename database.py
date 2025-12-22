@@ -286,20 +286,20 @@ class DatabaseManager:
         messages = []
         for row in rows:
             role, content, tool_calls_json, tool_call_id, sender, session_id, task_number = row
-        msg = {
-            "role": role,
-            "content": content,
-            "sender": sender,
-                "tool_call_id": tool_call_id,
-                "session_id": session_id,
-                "task_number": task_number
-        }
-        if tool_calls_json:
-            try:
-                msg["tool_calls"] = json.loads(tool_calls_json)
-            except:
-                pass
-        messages.append(msg)
+            msg = {
+                "role": role,
+                "content": content,
+                "sender": sender,
+                    "tool_call_id": tool_call_id,
+                    "session_id": session_id,
+                    "task_number": task_number
+            }
+            if tool_calls_json:
+                try:
+                    msg["tool_calls"] = json.loads(tool_calls_json)
+                except:
+                    pass
+            messages.append(msg)
         return messages
 
     def get_initial_user_prompt(self, session_id: str = None) -> str | None:
