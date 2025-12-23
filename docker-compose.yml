@@ -25,3 +25,16 @@ services:
       - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN}
     ipc: host
 
+  searxng:
+    image: searxng/searxng
+    container_name: searxng
+    ports:
+      - "666:8080"
+    volumes:
+      - ./searxng:/etc/searxng:rw  # Mount your local config folder
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:666/
+      - SEARXNG_BOT_DETECTION_FORWARD_IP_HEADER=0 
+      - SEARXNG_BOT_DETECTION=0 
+    restart: always
+

@@ -1,7 +1,10 @@
 openai>=1.0.0
 streamlit
-ddgs>=0.1.0
+# ddgs>=0.1.0
 pandas
 python-dotenv
 openai-agents
-
+requests
+trafilatura
+sentence-transformers
+torch

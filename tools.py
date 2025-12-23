@@ -1,9 +1,12 @@
+import trafilatura
+from sentence_transformers import SentenceTransformer, util
+import torch
+import requests
 import subprocess
 import hashlib
-import sqlite3
 import logging
 import time
-import typing
+from urllib.parse import urlparse
 import json
 from typing import List, Dict, Any, Optional
 from ddgs import DDGS
@@ -17,33 +20,97 @@ logger = logging.getLogger(__name__)
 
 # --- External Tools ---
 
+embedder = SentenceTransformer('all-MiniLM-L6-v2', device='cpu')
+
 @function_tool
-def web_search(query: str) -> str:
+def intelligent_web_search(query: str, max_results: int = 5) -> str:
     """
-    Использует DuckDuckGo для поиска в интернете.
-    
-    Args:
-        query (str): Строка поискового запроса.
+    Выполняет поиск, скачивает страницы, очищает HTML и возвращает
+    только релевантные параграфы, ранжированные по смыслу.
     """
-    logger.info("web_search: query=%s", query)
+    # 1. Поиск через SearXNG (JSON)
+    searx_url = "http://localhost:666/search"
     try:
-        results = DDGS().text(query, max_results=3)
+        params = {
+            'q': query, 
+            'format': 'json', 
+            'language': 'ru',
+            'engines': 'google' # ,bing,duckduckgo' # Явно указываем движки
+        }
+        resp = requests.get(searx_url, params=params, timeout=5)
+        resp.raise_for_status()
+        data = resp.json()
         
-        # Convert list of dicts to a formatted string
-        text_output = ""
-        for i, res in enumerate(results, 1):
-            title = res.get('title', 'No Title')
-            body = res.get('body', '')
-            href = res.get('href', '')
-            text_output += f"[{i}] {title}\nLink: {href}\nSummary: {body}\n\n"
-            
-        logger.debug("web_search: ok, raw length=%s", len(text_output))
-            
-        return text_output
+        # Если results нет, берем пустой список
+        search_results = data.get('results', [])[:max_results]
         
+        if not search_results:
+            return "По вашему запросу ничего не найдено."
+            
     except Exception as e:
-        logger.exception("web_search failed")
-        return f"Error searching: {e}"
+        logger.exception("intelligent_web_search failed: query=%s, error=%s", query, e)
+        return f"Ошибка поиска: {e}"
+
+    final_report = []
+
+    for res in search_results:
+        url = res.get('url')
+        title = res.get('title')
+
+        domain = urlparse(url).netloc.lower()
+        blocked_domains = ['zhihu.com', 'youtube.com', 'bilibili.com', 'weibo.com']
+        
+        if any(bad in domain for bad in blocked_domains):
+            print(f"⏩ Пропуск (медленный домен): {domain}")
+            continue
+        
+        # Пропуск бинарных файлов
+        if url.endswith(('.pdf', '.xml', '.doc', '.mp4', '.zip')):
+            continue
+        
+        # 2. Извлечение контента через Trafilatura
+        # fetch_url и extract работают очень быстро и не грузят GPU
+        downloaded = trafilatura.fetch_url(url)
+        if not downloaded:
+            continue
+            
+        clean_text = trafilatura.extract(downloaded, include_comments=False, include_tables=False)
+        
+        if not clean_text:
+            continue
+
+        # 3. Семантическая фильтрация (RAG on the Fly)
+        # Разбиваем текст на смысловые блоки (например, по 500 символов)
+        chunk_size = 500
+        chunks = [clean_text[i:i+chunk_size] for i in range(0, len(clean_text), chunk_size)]
+
+        if not chunks:
+            continue
+
+        # Кодируем запрос и чанки в векторы
+        query_embedding = embedder.encode(query, convert_to_tensor=True)
+        chunk_embeddings = embedder.encode(chunks, convert_to_tensor=True)
+
+        # Считаем схожесть
+        cos_scores = util.cos_sim(query_embedding, chunk_embeddings)[0]
+        
+        # Берем топ-2 лучших чанка из этой статьи
+        top_results = torch.topk(cos_scores, k=min(3, len(chunks)))
+        
+        relevant_snippets = []
+        for score, idx in zip(top_results.values, top_results.indices):
+            if score.item() > 0.3: # Порог релевантности
+                relevant_snippets.append(chunks[idx].replace("\n", " "))
+        
+        if relevant_snippets:
+            formatted_entry = f"Источник: {title} ({url})\n" + "\n".join(relevant_snippets)
+            final_report.append(formatted_entry)
+
+    if not final_report:
+        return "Удалось найти ссылки, но полезного контента на страницах не найдено (возможно, защита от ботов)."
+
+    # Собираем финальный контекст
+    return "\n\n".join(final_report)
 
 @function_tool
 def read_file(file_path: str) -> str:

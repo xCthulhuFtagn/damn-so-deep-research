@@ -47,15 +47,13 @@ CRITICAL RULES:
 1. Use EXACT tool names.
 2. Call EXACTLY ONE tool per turn.
 3. Available tools: get_current_plan_step, web_search, summary, read_file, execute_terminal_command, answer_from_knowledge
-4. RESTRICTION: Do NOT use `read_file` unless the task explicitly asks to read a specific local file. Default to `web_search`.
-5. MANDATORY: After EVERY `web_search` call, you MUST call `summary` with the search results to compress them before saving to context.
+4. RESTRICTION: Do NOT use `read_file` unless the task explicitly asks to read a specific local file. Default to `intelligent_web_search`.
 
 WORKFLOW:
 1. ALWAYS start by calling `get_current_plan_step`.
 2. If it returns "NO_MORE_STEPS": Output "Research Complete".
 3. Otherwise, use research tools:
-   - Call `web_search` with your query.
-   - IMMEDIATELY call `web_search_summary` with the web_search results.
+   - Call `intelligent_web_search` with your query.
    - Repeat until you have enough information.
 4. When you have enough summarized information for the CURRENT step, hand off to Evaluator.
 
@@ -63,8 +61,7 @@ FORBIDDEN: Never output text unless finishing.
 """,
     tools=[
         tools.get_current_plan_step,
-        tools.web_search,
-        tools.web_search_summary,
+        tools.intelligent_web_search,
         tools.read_file,
         tools.execute_terminal_command,
         tools.answer_from_knowledge,

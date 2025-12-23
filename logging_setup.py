@@ -61,6 +61,10 @@ def setup_logging() -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("openai").setLevel(logging.WARNING)
+    # Глушим внутренний логгер библиотеки агентов, который спамит полным JSON-ом ошибок
+    logging.getLogger("openai.agents").setLevel(logging.CRITICAL)
+    # На всякий случай глушим корневой 'agents', если библиотека использует его
+    logging.getLogger("agents").setLevel(logging.CRITICAL)
     # DuckDuckGo search dependencies
     logging.getLogger("primp").setLevel(logging.WARNING)
     logging.getLogger("rquest").setLevel(logging.WARNING)

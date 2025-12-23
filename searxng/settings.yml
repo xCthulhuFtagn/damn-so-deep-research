@@ -1,0 +1,26 @@
+use_default_settings: true
+
+server:
+  secret_key: "debug_key_for_now" 
+  limiter: false
+  image_proxy: true
+
+search:
+  safe_search: 0
+  autocomplete: "google"
+  default_lang: "ru"
+  # Добавьте эти строки:
+  formats:
+    - html
+    - json
+
+engines:
+  - name: ahmia
+    engine: ahmia
+    disabled: true
+  - name: torch
+    engine: torch
+    disabled: true
+  - name: wikidata
+    engine: wikidata
+    disabled: true

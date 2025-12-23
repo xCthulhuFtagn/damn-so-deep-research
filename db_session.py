@@ -1,7 +1,6 @@
 import json
 import logging
-from typing import List, Optional, Any
-from agents import Agent, Runner
+from typing import List, Any
 try:
     from agents.memory import Session
 except ImportError:
@@ -27,48 +26,101 @@ class DBSession(Session):
         """Retrieve conversation history based on session logic."""
         
         # 1. Context Anchor: Plan Summary
-        # This provides global context to every agent about the overall progress.
         plan_summary = db.get_plan_summary()
         system_msg = {
             "role": "system",
             "content": f"PROJECT STATUS:\n{plan_summary}"
         }
         
-        messages = [system_msg]
+        raw_messages = []
 
-        # 2. Fetch messages based on session type/logic
+        # 2. Fetch messages from DB
         if self.session_id == 'planner_init':
-            # Planner should see the clean state. Usually input is passed via Runner.run input arg.
-            # So we return minimal history (just the system anchor).
             pass
-
         elif self.session_id == 'reporter_flow':
-            # Clean slate for Reporter.
-            # It must use tools to fetch data.
             pass
-
         elif self.session_id == 'main_research':
-            # Task-Scoped Memory
             active_task = db.get_active_task()
             if active_task is not None:
-                # Fetch only messages related to the current active task
-                task_msgs = db.get_messages_for_task(self.session_id, active_task)
-                messages.extend(task_msgs)
+                # Task-Scoped Memory
+                raw_messages.extend(db.get_messages_for_task(self.session_id, active_task))
             else:
-                # Fallback if no active task (e.g. between steps): show recent history
-                # limit=10 seems reasonable for short-term memory
-                recent = db.get_last_n_messages(self.session_id, 10)
-                messages.extend(recent)
-        
+                # Fallback to recent history
+                raw_messages.extend(db.get_last_n_messages(self.session_id, 10))
         else:
-            # Default behavior for other/custom sessions
             msgs = db.load_messages(self.session_id)
-            if limit:
-                msgs = msgs[-limit:]
-            messages.extend(msgs)
+            if limit: msgs = msgs[-limit:]
+            raw_messages.extend(msgs)
 
-        logger.debug(f"DBSession({self.session_id}): get_items returning {len(messages)} items")
-        return messages
+        # 3. SANITIZATION
+        clean_messages = [system_msg]
+        
+        for m in raw_messages:
+            role = m["role"]
+            # Гарантируем, что content - всегда строка. Если None, то "".
+            content = m.get("content")
+            if content is None:
+                content = ""
+            
+            clean_msg = {
+                "role": role,
+                "content": content
+            }
+            
+            # --- ЛОГИКА ДЛЯ АССИСТЕНТА ---
+            if role == "assistant":
+                # Обработка tool_calls
+                if m.get("tool_calls"):
+                    tcs = m["tool_calls"]
+                    # Если вдруг пришло строкой (бывает в некоторых драйверах), парсим
+                    if isinstance(tcs, str):
+                        try:
+                            tcs = json.loads(tcs)
+                        except json.JSONDecodeError:
+                            tcs = []
+
+                    clean_tcs = []
+                    for tc in tcs:
+                        if isinstance(tc, dict):
+                            # ВАЖНО: OpenAI API требует, чтобы arguments были СТРОКОЙ (JSON string).
+                            # Если БД вернула dict, сериализуем обратно в строку.
+                            if "function" in tc:
+                                func = tc["function"]
+                                args = func.get("arguments", "{}")
+                                if isinstance(args, dict):
+                                    func["arguments"] = json.dumps(args)
+                            clean_tcs.append(tc)
+                        else:
+                            clean_tcs.append(tc)
+                            
+                    if clean_tcs:
+                        clean_msg["tool_calls"] = clean_tcs
+                
+                # Если сообщение пустое (нет текста и нет вызовов) - пропускаем
+                if not content and not clean_msg.get("tool_calls"):
+                    continue
+
+            # --- ЛОГИКА ДЛЯ ИНСТРУМЕНТА (TOOL) ---
+            elif role == "tool":
+                # У тула ОБЯЗАН быть tool_call_id
+                if m.get("tool_call_id"):
+                    clean_msg["tool_call_id"] = m["tool_call_id"]
+                else:
+                    # Без ID сообщение тула бесполезно
+                    continue
+                
+                # Имя тула (берем из sender или name)
+                if m.get("sender"):
+                    clean_msg["name"] = m["sender"]
+                elif m.get("name"):
+                    clean_msg["name"] = m["name"]
+
+            # Сообщения system/user копируем как есть (content уже обработан выше)
+            
+            clean_messages.append(clean_msg)
+
+        logger.debug(f"DBSession({self.session_id}): get_items returning {len(clean_messages)} sanitized items")
+        return clean_messages
 
     async def add_items(self, items: List[Any]) -> None:
         """Store new items."""

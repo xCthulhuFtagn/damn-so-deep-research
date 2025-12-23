@@ -288,7 +288,7 @@ class DatabaseManager:
             role, content, tool_calls_json, tool_call_id, sender, session_id, task_number = row
             msg = {
                 "role": role,
-                "content": content,
+                "content": content if content is not None else "", # Добавлена эта часть
                 "sender": sender,
                     "tool_call_id": tool_call_id,
                     "session_id": session_id,

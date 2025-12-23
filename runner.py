@@ -165,11 +165,25 @@ def _execute_phase(agent: Agent, input_text: str, session: DBSession, max_turns:
             current_input = "Please fix the previous error and continue."
         except BadRequestError as bre:
             retry_count += 1
-            logger.warning("BadRequestError (attempt %s): %s", retry_count, bre)
-            db.save_message("system", f"System Feedback: {str(bre)}", session_id=session.session_id)
+            # Обрезаем сообщение об ошибке до 500 символов
+            error_msg = str(bre)
+            if len(error_msg) > 1000:
+                short_error = error_msg[:1000] + "... [TRUNCATED]"
+            else:
+                short_error = error_msg
+            
+            # Логируем только короткую версию
+            logger.warning("BadRequestError (attempt %s): %s", retry_count, short_error)
+            
+            # В базу тоже лучше писать сокращенную версию, чтобы не раздувать файл
+            db.save_message("system", f"System Feedback: {short_error}", session_id=session.session_id)
             current_input = "Reduce output length and continue."
         except Exception as e:
-            logger.exception("Critical error in _execute_phase: %s", e)
+            # Тут тоже полезно обрезать, на всякий случай
+            err_msg = str(e)
+            short_err = err_msg[:500] + "... [TRUNCATED]" if len(err_msg) > 500 else err_msg
+            
+            logger.exception("Critical error in _execute_phase: %s", short_err)
             raise e
 
 # Global instance
