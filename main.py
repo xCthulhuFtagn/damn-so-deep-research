@@ -225,17 +225,19 @@ st.sidebar.title("🎛️ Control Center")
 
 # Кнопка полной остановки (только если рой запущен)
 if database.is_swarm_running():
-    if st.sidebar.button("🛑 Stop Research", type="primary"):
-        logger.info("User requested stop")
-        database.set_stop_signal(True)
-        st.toast("Stopping swarm...", icon="🛑")
+    drop_research_text = "🛑 Drop running research"
 else:
+    drop_research_text = "🛑 Drop research"
+if st.sidebar.button("🛑 Drop research", type="primary"):
+    logger.info("User requested stop")
+    database.set_stop_signal(True)
+    st.toast("Stopping swarm...", icon="🛑")
     # Кнопка полного сброса (только если рой НЕ запущен)
-    if st.sidebar.button("Reset Research"):
-        logger.info("User requested reset: clearing DB and UI state")
-        database.clear_db()
-        st.session_state.clear()
-        st.rerun()
+    logger.info("User requested reset: clearing DB and UI state")
+    st.toast("Clearing DB...", icon="🛑")
+    database.clear_db()
+    st.session_state.clear()
+    st.rerun()
 
 # Отображение плана
 st.sidebar.subheader("📋 Research Plan")
@@ -316,8 +318,8 @@ for msg in st.session_state.messages:
         if msg["content"] and ("Error" in msg["content"] or "failed" in msg.get("content", "").lower()):
             with st.chat_message("assistant", avatar="🚨"):
                 st.error(msg["content"])
-        continue 
-    if msg["role"] == "tool": continue   # Скрываем результаты инструментов (промежуточные)
+        continue
+    if msg["role"] == "tool": continue   # Скрываем результаты инструментов (промежуточные) 
     
     # Пропускаем только пустые или чисто технические сообщения ассистента без вызовов инструментов
     content = (msg.get("content") or "").strip()
@@ -339,8 +341,28 @@ for msg in st.session_state.messages:
 
     with st.chat_message(role):
         header = ""
-        if sender:
-            header += f"**{sender}** "
+
+        if tool_calls:
+            tool_call = tool_calls[0]
+            func_name = tool_call.get("function", {}).get("name")
+            func_args_str = tool_call.get("function", {}).get("arguments", "{}")
+            
+            try:
+                func_args = json.loads(func_args_str)
+            except json.JSONDecodeError:
+                func_args = {} # Fallback to empty dict
+            match func_name:
+                case "intelligent_web_search":
+                    header += f"**{sender}({func_args.get("query", "N/A")})** "
+                case "execute_terminal_command":
+                    header += f"**{sender}({func_args.get("command", "N/A")})** "
+                case "mark_step_failed":
+                    header += f"**{sender}({func_args.get("error_msg", "N/A")})** "
+                case _:
+                    header += f"**{sender}()** "
+        else:
+            if sender:
+                header += f"**{sender}** "
         
         # Add visual context indicators
         meta = []
@@ -354,7 +376,8 @@ for msg in st.session_state.messages:
             
         if header:
             st.markdown(header)
-        st.markdown(content)
+        if not tool_calls:
+            st.markdown(content)
 
 # --- Logic for Running Swarm ---
 def start_swarm(prompt: str, start_agent_name="Planner"):

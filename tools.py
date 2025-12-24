@@ -9,8 +9,7 @@ import time
 from urllib.parse import urlparse
 import json
 from typing import List, Dict, Any, Optional
-from ddgs import DDGS
-from config import DB_PATH
+from config import DB_PATH, NUM_SEARCHES_PER_CALL
 from database import db
 from logging_setup import setup_logging
 from agents import function_tool
@@ -23,7 +22,7 @@ logger = logging.getLogger(__name__)
 embedder = SentenceTransformer('all-MiniLM-L6-v2', device='cpu')
 
 @function_tool
-def intelligent_web_search(query: str, max_results: int = 5) -> str:
+def intelligent_web_search(query: str) -> str:
     """
     Выполняет поиск, скачивает страницы, очищает HTML и возвращает
     только релевантные параграфы, ранжированные по смыслу.
@@ -42,7 +41,7 @@ def intelligent_web_search(query: str, max_results: int = 5) -> str:
         data = resp.json()
         
         # Если results нет, берем пустой список
-        search_results = data.get('results', [])[:max_results]
+        search_results = data.get('results', [])[:NUM_SEARCHES_PER_CALL]
         
         if not search_results:
             return "По вашему запросу ничего не найдено."
@@ -52,7 +51,7 @@ def intelligent_web_search(query: str, max_results: int = 5) -> str:
         return f"Ошибка поиска: {e}"
 
     final_report = []
-
+    logger.info("intelligent_web_search: query='%s' urls: %s", query, [res.get('url') for res in search_results])
     for res in search_results:
         url = res.get('url')
         title = res.get('title')
