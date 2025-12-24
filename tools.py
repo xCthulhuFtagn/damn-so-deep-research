@@ -226,8 +226,7 @@ def web_search_summary(summarized_content: str) -> str:
 @function_tool
 def answer_from_knowledge(answer: str) -> str:
     """
-    Эхо-инструмент: принимает сгенерированный текст ответа и возвращает его как есть,
-    чтобы зафиксировать ответ через tool_call.
+    Эхо-инструмент: принимает сгенерированный текст и возвращает его как есть, чтобы зафиксировать ответ через tool_call.
     """
     return answer
 
