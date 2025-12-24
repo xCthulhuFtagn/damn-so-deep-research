@@ -4,11 +4,13 @@ import time
 from typing import Optional
 from agents import Runner, Agent, RunConfig, ModelSettings
 from agents.exceptions import ModelBehaviorError
-from openai import BadRequestError
-from agents.models.openai_provider import OpenAIProvider
+from agents.models.interface import ModelProvider
+from agents.models.interface import Model
+from openai import AsyncOpenAI, BadRequestError
+from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
 from database import db
 from db_session import DBSession
-from config import MAX_TURNS, OPENAI_API_KEY, OPENAI_BASE_URL, MAX_RETRIES
+from config import MAX_TURNS, OPENAI_API_KEY, OPENAI_BASE_URL, MAX_RETRIES, MODEL
 
 # Delayed import to avoid circular dependency issues if possible, 
 # or ensure research_agents imports database/tools safely.
@@ -16,6 +18,27 @@ from config import MAX_TURNS, OPENAI_API_KEY, OPENAI_BASE_URL, MAX_RETRIES
 from research_agents import get_agent_by_name, planner_agent, executor_agent, reporter_agent
 
 logger = logging.getLogger(__name__)
+
+class VLLMChatCompletionsProvider(ModelProvider):
+    """
+    Forces Agents SDK to use Chat Completions API shape against an OpenAI-compatible server (vLLM).
+    This avoids Responses API 'input' incompatibilities when Session injects history as a list.
+    """
+    def __init__(self, base_url: str, api_key: str, default_model: str):
+        # AsyncOpenAI is required by OpenAIChatCompletionsModel
+        self._client = AsyncOpenAI(
+            base_url=base_url,
+            api_key=api_key
+        )
+        self._default_model = default_model
+
+    def get_model(self, model_name: str | None) -> Model:
+        return OpenAIChatCompletionsModel(
+            model=model_name or self._default_model,
+            openai_client=self._client
+        )
+
+
 
 class SwarmRunner:
     def __init__(self):
@@ -43,9 +66,10 @@ class SwarmRunner:
 
         # Standard OpenAI Configuration
         run_config = RunConfig(
-            model_provider=OpenAIProvider(
+            model_provider=VLLMChatCompletionsProvider(
                 api_key=OPENAI_API_KEY,
-                base_url=OPENAI_BASE_URL
+                base_url=OPENAI_BASE_URL,
+                default_model=MODEL
             ),
             tracing_disabled=True,
             model_settings=ModelSettings(
@@ -159,6 +183,7 @@ def _execute_phase(agent: Agent, input_text: str, session: DBSession, max_turns:
             return result
 
         except ModelBehaviorError as mbe:
+            logger.exception("ModelBehaviorError: %s", mbe)
             retry_count += 1
             logger.warning("ModelBehaviorError (attempt %s): %s", retry_count, mbe)
             db.save_message("system", f"System Feedback: {str(mbe)}", session_id=session.session_id)

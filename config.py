@@ -14,7 +14,7 @@ LOG_FILE = os.getenv("LOG_FILE")  # optional
 # Настройки LLM
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL") # Если None, будет использоваться стандартный OpenAI
-MODEL = os.getenv("OPENAI_MODEL", "gpt-4o")
+MODEL = os.getenv("OPENAI_MODEL", "gpt-oss-20b")
 
 # Инфраструктура
 DB_NAME = os.getenv("DB_NAME", "research_state.db")
