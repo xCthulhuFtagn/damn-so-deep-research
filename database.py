@@ -382,6 +382,19 @@ class DatabaseManager:
         conn.commit()
         conn.close()
 
+
+    def get_pending_approvals_count(self) -> int:
+        """Return number of pending terminal approvals (approved = 0)."""
+        try:
+            conn = db.get_connection()
+            c = conn.cursor()
+            row = c.execute("SELECT COUNT(*) FROM approvals WHERE approved = 0").fetchone()
+            conn.close()
+            return int(row[0]) if row and row[0] is not None else 0
+        except Exception:
+            logger.exception("DatabaseManager: failed to count pending approvals")
+            return 0
+
 # Global Instance
 db = DatabaseManager()
 
@@ -420,3 +433,4 @@ def prune_last_tool_message(): return db.prune_last_tool_message()
 def has_pending_approvals(): return db.has_pending_approvals()
 def prune_messages_for_ui(): db.prune_messages_for_ui()
 def load_agent_window(limit=10): return db.get_last_n_messages("default", limit) # Approximate mapping
+def get_pending_approvals_count(): return db.get_pending_approvals_count()

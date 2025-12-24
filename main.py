@@ -155,6 +155,7 @@ def _patched_process_model_response(*args, **kwargs):
     # Вызываем оригинал
     return _run_impl.RunImpl._original_process_model_response(*args, **kwargs)
 
+
 # Применяем патч
 _run_impl.RunImpl.process_model_response = _patched_process_model_response
 logger.info("✅ Applied MonkeyPatch (v4) - Aggressive tool name sanitization")
@@ -402,11 +403,14 @@ if database.is_swarm_running():
         st.write("Agents are performing research steps...")
         # Polling loop
         last_msg_count = len(st.session_state.messages)
+        last_pending_approvals_count = database.get_pending_approvals_count()
         while database.is_swarm_running():
             time.sleep(2)
             # Check for new messages to trigger UI refresh
             current_messages = database.load_messages()
-            if len(current_messages) > last_msg_count:
+            current_msg_count = len(current_messages)
+            current_pending_approvals_count = database.get_pending_approvals_count()
+            if (current_msg_count != last_msg_count) or (current_pending_approvals_count != last_pending_approvals_count):
                 st.rerun()
             
         # Проверяем на ошибки перед финальным рендером
