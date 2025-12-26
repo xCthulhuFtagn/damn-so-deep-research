@@ -75,11 +75,40 @@ LOG_FILE=logs/app.log streamlit run main.py
 
 ## Структура проекта (кратко)
 
-- `main.py` — Streamlit UI и запуск Swarm.
-- `agents.py` — определения агентов (Planner/Executor/Evaluator/Strategist/Reporter).
-- `tools.py` — инструменты для агентов (поиск, чтение файлов, терминал с одобрениями, работа с контекстом).
-- `database.py` — SQLite: таблицы `plan` и `approvals`.
-- `config.py` — загрузка `.env` и настройки (ключи, модель, БД, лимиты).
+- `main.py`: The main Streamlit application interface, responsible for user interaction and orchestrating the agent swarm.
+- `research_agents.py`: Defines the various AI agents (`Planner`, `Executor`, `Evaluator`, `Strategist`, `Reporter`) and their specific instructions, tools, and handoff mechanisms.
+- `tools.py`: Provides a collection of tools that agents can use, such as web search, file reading, terminal command execution (with user approval), and context management.
+- `database.py`: Manages the SQLite database interactions, including schema definition for `plan`, `approvals`, `messages`, and `global_state` tables, and methods for data manipulation.
+- `db_session.py`: Acts as an adapter between the `agents` SDK's session memory and the `DatabaseManager` for persisting conversation history and research state.
+- `config.py`: Handles loading environment variables from `.env` and provides application-wide configuration settings like API keys, model names, database path, and execution limits.
+- `runner.py`: Contains the core logic for running the agent swarm, managing agent handoffs, and integrating with the Streamlit UI.
+- `logging_setup.py`: Configures the application's logging system.
+- `requirements.txt`: Lists all Python dependencies required for the project.
+- `docker-compose.yml`: Docker Compose configuration for setting up a local vLLM server.
+- `Dockerfile`: Defines the Docker image for the main application.
+- `searxng/`: Contains configuration files for the SearXNG metasearch engine, which can be used for web searches.
+
+### Используемые Агенты
+
+Проект использует архитектуру **OpenAI Swarm** с пятью специализированными агентами, каждый из которых выполняет свою роль в процессе исследования:
+
+- **Planner (Планировщик)**: Отвечает за создание первоначального плана исследования. Он разбивает общую задачу на последовательность конкретных, выполнимых шагов.
+- **Executor (Исполнитель)**: Выполняет активные шаги плана. Использует доступные инструменты (веб-поиск, терминал, чтение файлов, базу знаний) для сбора информации. Ограничен в количестве вызовов веб-поиска.
+- **Evaluator (Оценщик)**: Проверяет результаты, полученные `Executor`'ом для текущего шага. Если результаты удовлетворительны, он подтверждает шаг; в противном случае, помечает шаг как неудачный.
+- **Strategist (Стратег)**: Активируется, когда `Evaluator` помечает шаг как неудачный. Его задача — анализировать причину неудачи и добавлять корректирующие шаги в план, чтобы `Executor` мог повторить попытку.
+- **Reporter (Репортер)**: Конечный агент, который собирает все завершенные результаты исследования и генерирует итоговый отчет в формате Markdown.
+
+### Использование Базы Данных (SQLite)
+
+Проект активно использует базу данных SQLite (`research_state.db`) для управления состоянием исследования и обеспечения персистентности между сессиями. Основные таблицы и их функции:
+
+- **`plan`**: Хранит план исследования. Каждая запись представляет собой шаг с описанием, текущим статусом (`TODO`, `IN_PROGRESS`, `DONE`, `FAILED`) и результатом выполнения.
+- **`approvals`**: Используется для управления одобрениями команд терминала. Если агент предлагает выполнить команду, она сначала сохраняется здесь, ожидая ручного одобрения пользователем через UI.
+- **`messages`**: Сохраняет всю историю сообщений и взаимодействий между агентами, включая роли, контент, вызовы инструментов и их результаты. Это обеспечивает возможность отслеживания всего процесса.
+- **`global_state`**: Хранит общие флаги состояния, такие как `swarm_running` (индикатор активности роя) и `stop_requested` (флаг для остановки выполнения).
+
+База данных инициализируется и управляется через `database.py`, а `db_session.py` предоставляет интерфейс для сохранения и загрузки истории сообщений агентов, адаптируя ее к формату, ожидаемому SDK агентов.
+
 
 ## Docker
 
@@ -106,7 +135,7 @@ docker run -p 8501:8501 --env-file .env -v $(pwd)/logs:/app/logs -v $(pwd)/resea
 
 Сервер будет доступен по адресу `http://localhost:8001/v1`.
 
-Настройки в `.env` для приложения:
+Настройки в `.env` для приложения включают, но не ограничены:
 ```bash
 OPENAI_BASE_URL=http://localhost:8001/v1
 OPENAI_API_KEY=EMPTY
