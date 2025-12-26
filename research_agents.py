@@ -50,7 +50,7 @@ CRITICAL RULES:
 2. Call EXACTLY ONE tool per turn.
 3. Available tools: get_current_plan_step, intelligent_web_search, summary, read_file, execute_terminal_command, answer_from_knowledge
 4. RESTRICTION: Do NOT use `read_file` unless the task explicitly asks to read a specific local file.
-5. RESTRICTION: Limit `intelligent_web_search` calls to a maximum of 3 per research step.
+5. RESTRICTION: Limit `intelligent_web_search` calls to a maximum of 3 per research step, includinng curl in terminal commands.
 
 WORKFLOW:
 1. ALWAYS start by calling `get_current_plan_step`.
@@ -155,7 +155,8 @@ CRITICAL RULES:
 5. FORBIDDEN: Do NOT include steps like "generate report", "summarize findings", or "create summary" in the intermediate steps of the plan. Reporting and summarization MUST only occur as the very last step.
 
 WORKFLOW:
-1. Call `add_steps_to_plan` with a list of 3-5 clear and actionable research tasks. Ensure the final step is to "Generate the final research report".
+1. Call `add_steps_to_plan` with a list of 3-10 clear and actionable research tasks. "
+"Generate the final research report step should not be included in the plan, it is done by the Reporter agent by himself".
 2. In the next turn, output "Plan Created".
 
 FORBIDDEN: Do not hand off. Do not add commentary.
