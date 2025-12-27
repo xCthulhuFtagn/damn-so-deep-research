@@ -223,6 +223,31 @@ class DatabaseManager:
             summary.append(f"Step {row['step_number']}: {row['status']} - {row['description']}")
         return "\n".join(summary)
 
+    def get_active_step_description(self) -> str:
+        """Return the description of the current active step from the plan.
+
+        Looks for the next actionable step (IN_PROGRESS or TODO) and returns its description.
+        Falls back to generic messages if no active step is found.
+        """
+        # Reuse existing in-memory plan overview
+        df = self.get_all_plan()
+        if df.empty:
+            return "Waiting for plan."
+
+        conn = self.get_connection()
+        try:
+            active_df = pd.read_sql_query(
+                "SELECT description FROM plan WHERE status IN ('IN_PROGRESS', 'TODO') "
+                "ORDER BY status ASC, step_number ASC LIMIT 1",
+                conn
+            )
+        finally:
+            conn.close()
+
+        if not active_df.empty:
+            return str(active_df.iloc[0]['description'])
+        return "No active research step."
+
 # --- Message Persistence ---
 
     def save_message(self, role: str, content: str, tool_calls: list = None, tool_call_id: str = None, sender: str = None, session_id: str = "default"):
@@ -419,15 +444,8 @@ def save_message(role, content, tool_calls=None, tool_call_id=None, sender=None,
     db.save_message(role, content, tool_calls, tool_call_id, sender, session_id)
 def load_messages(session_id=None): return db.load_messages(session_id)
 def get_active_step_description():
-    # Helper to get description from plan based on status
-    df = db.get_all_plan()
-    if df.empty: return "Waiting for plan."
-    # Logic copied from original
-    conn = db.get_connection()
-    df = pd.read_sql_query("SELECT description FROM plan WHERE status IN ('IN_PROGRESS', 'TODO') ORDER BY status ASC, step_number ASC LIMIT 1", conn)
-    conn.close()
-    if not df.empty: return str(df.iloc[0]['description'])
-    return "No active research step."
+    # Call the new class method to retrieve the active step description
+    return db.get_active_step_description()
 def get_initial_user_prompt(session_id=None): return db.get_initial_user_prompt(session_id)
 def prune_last_tool_message(): return db.prune_last_tool_message()
 def has_pending_approvals(): return db.has_pending_approvals()
