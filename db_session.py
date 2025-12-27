@@ -14,7 +14,7 @@ except ImportError:
         async def clear_session(self) -> None: ...
 
 
-from database import db
+from database import DatabaseManager
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +64,7 @@ class DBSession(Session):
           - {"type":"function_call_output","call_id":"...","output":"..."}
         """
         # 1) Context Anchor: Plan Summary (system message)
-        plan_summary = db.get_plan_summary()
+        plan_summary = DatabaseManager.get_instance().get_plan_summary()
         system_text = f"PROJECT STATUS:\n{plan_summary}"
         items: List[dict] = [_msg_item("system", system_text)]
 
@@ -76,13 +76,13 @@ class DBSession(Session):
         elif self.session_id == "reporter_flow":
             pass
         elif self.session_id == "main_research":
-            active_task = db.get_active_task()
+            active_task = DatabaseManager.get_instance().get_active_task()
             if active_task is not None:
-                raw_messages.extend(db.get_messages_for_task(self.session_id, active_task))
+                raw_messages.extend(DatabaseManager.get_instance().get_messages_for_task(self.session_id, active_task))
             else:
-                raw_messages.extend(db.get_last_n_messages(self.session_id, 10))
+                raw_messages.extend(DatabaseManager.get_instance().get_last_n_messages(self.session_id, 10))
         else:
-            msgs = db.load_messages(self.session_id)
+            msgs = DatabaseManager.get_instance().load_messages(self.session_id)
             if limit:
                 msgs = msgs[-limit:]
             raw_messages.extend(msgs)
@@ -163,7 +163,7 @@ class DBSession(Session):
 
     async def add_items(self, items: List[Any]) -> None:
         """
-        Store new items coming from the SDK into DB.
+        Store new items coming from the SDK into DatabaseManager.get_instance().
         We keep the DB schema: role/content + optional tool_calls/tool_call_id.
         """
         logger.debug("DBSession(%s): add_items called with %d items", self.session_id, len(items))
@@ -268,7 +268,7 @@ class DBSession(Session):
                 else getattr(item, "sender", getattr(item, "name", None))
             )
 
-            db.save_message(
+            DatabaseManager.get_instance().save_message(
                 role=str(role),
                 content=content if content.strip() else None,
                 tool_calls=final_tool_calls if final_tool_calls else None,
@@ -278,7 +278,7 @@ class DBSession(Session):
             )
 
     async def pop_item(self) -> dict | None:
-        conn = db.get_connection()
+        conn = DatabaseManager.get_instance().get_connection()
         c = conn.cursor()
         c.execute("SELECT * FROM messages WHERE session_id = ? ORDER BY id DESC LIMIT 1", (self.session_id,))
         row = c.fetchone()
@@ -293,7 +293,7 @@ class DBSession(Session):
         return {"content": "popped"}
 
     async def clear_session(self) -> None:
-        conn = db.get_connection()
+        conn = DatabaseManager.get_instance().get_connection()
         c = conn.cursor()
         c.execute("DELETE FROM messages WHERE session_id = ?", (self.session_id,))
         conn.commit()

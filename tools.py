@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 import json
 from typing import List, Dict, Any, Optional
 from config import DB_PATH, NUM_SEARCHES_PER_CALL
-from database import db
+from database import DatabaseManager
 from logging_setup import setup_logging
 from agents import function_tool
 
@@ -145,7 +145,7 @@ def execute_terminal_command(command: str) -> str:
     logger.info("execute_terminal_command: requested hash=%s cmd=%s", cmd_hash, command)
     
     # 1. Check existing approval or create request
-    conn = db.get_connection()
+    conn = DatabaseManager.get_instance().get_connection()
     c = conn.cursor()
     row = c.execute("SELECT approved FROM approvals WHERE command_hash = ?", (cmd_hash,)).fetchone()
     
@@ -163,7 +163,7 @@ def execute_terminal_command(command: str) -> str:
     waited = 0
     
     while status == 0:
-        if db.should_stop():
+        if DatabaseManager.get_instance().should_stop():
             logger.info("execute_terminal_command: stop signal received")
             return "Execution stopped by user signal."
             
@@ -173,7 +173,7 @@ def execute_terminal_command(command: str) -> str:
             logger.info("Waiting for approval... hash=%s time=%ds", cmd_hash, waited)
             
         # Re-check status
-        conn = db.get_connection()
+        conn = DatabaseManager.get_instance().get_connection()
         c = conn.cursor()
         r = c.execute("SELECT approved FROM approvals WHERE command_hash = ?", (cmd_hash,)).fetchone()
         conn.close()
@@ -217,7 +217,7 @@ def web_search_summary(summarized_content: str) -> str:
     
     # 1. Вызываем метод очистки в DatabaseManager
     # Это удалит "тяжелый" текст предыдущего шага (web_search) из БД
-    db.prune_last_tool_message()
+    DatabaseManager.get_instance().prune_last_tool_message()
     
     # 2. Возвращаем успех
     # Сама суммаризация (summarized_content) сохранится в аргументах вызова этого инструмента
@@ -272,8 +272,8 @@ def add_steps_to_plan(steps: List[str]) -> str:
 
     count = 0
     # Offset-from-max dedupe policy
-    existing_nums = db.get_existing_step_numbers()
-    max_num = db.get_max_step_number()
+    existing_nums = DatabaseManager.get_instance().get_existing_step_numbers()
+    max_num = DatabaseManager.get_instance().get_max_step_number()
     used_nums = set(existing_nums)
 
     for line in steps_list:
@@ -300,7 +300,7 @@ def add_steps_to_plan(steps: List[str]) -> str:
                 max_num = step_num
 
             used_nums.add(step_num)
-            db.add_plan_step(desc, step_num)
+            DatabaseManager.get_instance().add_plan_step(desc, step_num)
             count += 1
         except Exception as e:
             logger.error("Failed to add step line '%s': %s", line, e)
@@ -316,14 +316,14 @@ def get_current_plan_step() -> str:
     ЭТОТ ИНСТРУМЕНТ НЕ ПРИНИМАЕТ АРГУМЕНТОВ.
     """
     logger.info("get_current_plan_step called")
-    step = db.get_next_step()
+    step = DatabaseManager.get_instance().get_next_step()
     if step is None:
         logger.info("get_current_plan_step: NO_MORE_STEPS")
-        db.set_active_task(None)
+        DatabaseManager.get_instance().set_active_task(None)
         return "NO_MORE_STEPS"
     
     # Set global active task so all subsequent messages are tagged with this task number
-    db.set_active_task(int(step["step_number"]))
+    DatabaseManager.get_instance().set_active_task(int(step["step_number"]))
     
     logger.info("get_current_plan_step: step_id=%s step_number=%s", step["id"], step["step_number"])
     return f"Current Step ID: {step['id']}, Step Number: {step['step_number']}, Task: {step['description']}"
@@ -336,7 +336,7 @@ def get_research_summary() -> str:
     ЭТОТ ИНСТРУМЕНТ НЕ ПРИНИМАЕТ АРГУМЕНТОВ.
     """
     logger.debug("get_research_summary called")
-    return db.get_done_results_text()
+    return DatabaseManager.get_instance().get_done_results_text()
 
 @function_tool
 def submit_step_result(step_id: int, result_text: str) -> str:
@@ -348,9 +348,9 @@ def submit_step_result(step_id: int, result_text: str) -> str:
         result_text (str): Текст с результатами исследования.
     """
     logger.info("submit_step_result: step_id=%s result_chars=%s", step_id, len(result_text or ""))
-    db.update_step_status(step_id, "DONE", result_text)
+    DatabaseManager.get_instance().update_step_status(step_id, "DONE", result_text)
     # Clear active task as we are done
-    db.set_active_task(None)
+    DatabaseManager.get_instance().set_active_task(None)
     return "Result saved to Database. Step marked as DONE."
 
 @function_tool
@@ -363,7 +363,7 @@ def mark_step_failed(step_id: int, error_msg: str) -> str:
         error_msg (str): Причина провала.
     """
     logger.warning("mark_step_failed: step_id=%s error_chars=%s", step_id, len(error_msg or ""))
-    db.update_step_status(step_id, "FAILED", error_msg)
+    DatabaseManager.get_instance().update_step_status(step_id, "FAILED", error_msg)
     # Do NOT clear active task here, so Strategist can still see the context of this failed task
     return "Step marked as FAILED."
 
@@ -374,18 +374,18 @@ def get_recovery_context() -> str:
     Для использования Стратегом.
     """
     # 1. User Prompt
-    prompt = db.get_initial_user_prompt() or "N/A"
+    prompt = DatabaseManager.get_instance().get_initial_user_prompt() or "N/A"
     
     # 2. Plan Status
-    plan = db.get_plan_summary()
+    plan = DatabaseManager.get_instance().get_plan_summary()
     
     # 3. Active (Failed) Step Details
-    active_task = db.get_active_task()
+    active_task = DatabaseManager.get_instance().get_active_task()
     failed_context = ""
     if active_task:
         # Get messages for this task
         # We assume we are in 'main_research' session usually
-        msgs = db.get_messages_for_task("main_research", active_task)
+        msgs = DatabaseManager.get_instance().get_messages_for_task("main_research", active_task)
         # Extract last few messages as "Error Context"
         # Or just return a summary saying "Step X failed"
         failed_context = f"Step {active_task} logs:\n"

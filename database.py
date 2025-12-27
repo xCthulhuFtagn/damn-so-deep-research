@@ -1,4 +1,5 @@
 import sqlite3
+import threading
 import pandas as pd
 import json
 import logging
@@ -11,23 +12,33 @@ logger = logging.getLogger(__name__)
 
 class DatabaseManager:
     _instance = None
+    _instance_lock = threading.Lock()
 
     def __new__(cls):
+        # Оптимизация: сначала проверяем без лока (быстро)
         if cls._instance is None:
-            cls._instance = super(DatabaseManager, cls).__new__(cls)
-            cls._instance._initialized = False
+            with cls._instance_lock:
+                # Вторая проверка под локом (Double-Checked Locking)
+                if cls._instance is None:
+                    cls._instance = super(DatabaseManager, cls).__new__(cls)
+                    
+                    # --- ИНИЦИАЛИЗАЦИЯ ПРЯМО ЗДЕСЬ ---
+                    # Делаем всё здесь, чтобы гарантировать выполнение 1 раз
+                    # и под защитой лока.
+                    cls._instance.db_path = DB_PATH
+                    cls._instance._active_task_number = None
+                    cls._instance.init_db() 
+                    # ---------------------------------
+                    
         return cls._instance
 
     def __init__(self):
-        if self._initialized:
-            return
-        self.db_path = DB_PATH
-        self._active_task_number = None
-        self._initialized = True
-        self.init_db()
+        # __init__ будет вызываться Python'ом каждый раз при DatabaseManager(),
+        # но нам он больше не нужен, так как всё сделано в __new__.
+        pass
 
     def get_connection(self):
-        return sqlite3.connect(self.db_path)
+        return sqlite3.connect(self.db_path, timeout=30)
 
     def init_db(self):
         logger.info("DB init: path=%s", self.db_path)
@@ -147,6 +158,17 @@ class DatabaseManager:
 
     def get_active_task(self) -> Optional[int]:
         return self._active_task_number
+
+    @classmethod
+    def get_instance(cls) -> "DatabaseManager":
+        """Return the singleton instance (alias for cls())."""
+        return cls()
+
+    @classmethod
+    def reset_instance(cls) -> None:
+        """Reset the singleton instance (use for testing resets)."""
+        with cls._instance_lock:
+            cls._instance = None
 
 # --- Plan Operations ---
 
@@ -411,7 +433,7 @@ class DatabaseManager:
     def get_pending_approvals_count(self) -> int:
         """Return number of pending terminal approvals (approved = 0)."""
         try:
-            conn = db.get_connection()
+            conn = self.get_connection()
             c = conn.cursor()
             row = c.execute("SELECT COUNT(*) FROM approvals WHERE approved = 0").fetchone()
             conn.close()
@@ -420,35 +442,20 @@ class DatabaseManager:
             logger.exception("DatabaseManager: failed to count pending approvals")
             return 0
 
-# Global Instance
-db = DatabaseManager()
+    def get_pending_approvals(self) -> pd.DataFrame:
+        conn = self.get_connection()
+        df = pd.read_sql_query("SELECT * FROM approvals WHERE approved = 0", conn)
+        conn.close()
+        return df
+
+    def update_approval_status(self, command_hash: str, status: int):
+        conn = self.get_connection()
+        c = conn.cursor()
+        c.execute("UPDATE approvals SET approved=? WHERE command_hash=?", (status, command_hash))
+        conn.commit()
+        conn.close()
 
 # --- Backward Compatibility Wrappers (Proxies to db instance) ---
 
-def init_db(): db.init_db()
-def clear_db(): db.clear_db()
-def set_swarm_running(r): db.set_swarm_running(r)
-def is_swarm_running(): return db.is_swarm_running()
-def set_stop_signal(r): db.set_stop_signal(r)
-def should_stop(): return db.should_stop()
-def add_plan_step(d, n): db.add_plan_step(d, n)
-def get_next_step(): return db.get_next_step()
-def update_step_status(i, s, r=None): db.update_step_status(i, s, r)
-def get_all_plan(): return db.get_all_plan()
-def get_max_step_number(): return db.get_max_step_number()
-def get_existing_step_numbers(): return db.get_existing_step_numbers()
-def get_completed_steps_count(): return db.get_completed_steps_count()
-def get_done_results_text(): return db.get_done_results_text()
-def save_message(role, content, tool_calls=None, tool_call_id=None, sender=None, session_id="default"): 
-    # Notice updated signature to support session_id if passed, though old calls won't pass it.
-    db.save_message(role, content, tool_calls, tool_call_id, sender, session_id)
-def load_messages(session_id=None): return db.load_messages(session_id)
-def get_active_step_description():
-    # Call the new class method to retrieve the active step description
-    return db.get_active_step_description()
-def get_initial_user_prompt(session_id=None): return db.get_initial_user_prompt(session_id)
-def prune_last_tool_message(): return db.prune_last_tool_message()
-def has_pending_approvals(): return db.has_pending_approvals()
-def prune_messages_for_ui(): db.prune_messages_for_ui()
-def load_agent_window(limit=10): return db.get_last_n_messages("default", limit) # Approximate mapping
-def get_pending_approvals_count(): return db.get_pending_approvals_count()
+# Wrapper functions have been removed in favor of direct singleton access via `db`:
+# Access DatabaseManager through the singleton instance (e.g., `DatabaseManager.get_instance().init_db()`).

@@ -8,7 +8,7 @@ from agents.models.interface import ModelProvider
 from agents.models.interface import Model
 from openai import AsyncOpenAI, BadRequestError
 from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
-from database import db
+from database import DatabaseManager
 from db_session import DBSession
 from config import MAX_TURNS, OPENAI_API_KEY, OPENAI_BASE_URL, MAX_RETRIES, MODEL
 
@@ -46,12 +46,12 @@ class SwarmRunner:
 
     def run_in_background(self, start_agent: Agent, input_text: str, max_turns: int = MAX_TURNS):
         """Starts the swarm execution in a background thread."""
-        if db.is_swarm_running():
+        if DatabaseManager.get_instance().is_swarm_running():
             logger.warning("Swarm is already running. Cannot start another instance.")
             return
 
-        db.set_swarm_running(True)
-        db.set_stop_signal(False)
+        DatabaseManager.get_instance().set_swarm_running(True)
+        DatabaseManager.get_instance().set_stop_signal(False)
         
         self.thread = threading.Thread(
             target=self._run_wrapper,
@@ -105,11 +105,11 @@ class SwarmRunner:
                 session = DBSession("main_research")
                 
                 while True:
-                    if db.should_stop():
+                    if DatabaseManager.get_instance().should_stop():
                         logger.info("Stop signal received in Execution Phase.")
                         break
                         
-                    next_step = db.get_next_step()
+                    next_step = DatabaseManager.get_instance().get_next_step()
                     if next_step is None:
                         logger.info("No more steps (TODO/IN_PROGRESS). Execution Phase Complete.")
                         break
@@ -146,10 +146,10 @@ class SwarmRunner:
 
         except Exception as e:
             logger.exception("Unexpected error in swarm background thread: %s", e)
-            db.save_message("system", f"Error in background runner: {str(e)}")
+            DatabaseManager.get_instance().save_message("system", f"Error in background runner: {str(e)}")
 
         finally:
-            db.set_swarm_running(False)
+            DatabaseManager.get_instance().set_swarm_running(False)
             logger.info("Swarm background thread finished.")
 
 def current_phase_is_planner(agent: Agent) -> bool:
@@ -167,7 +167,7 @@ def _execute_phase(agent: Agent, input_text: str, session: DBSession, max_turns:
     current_input = input_text
 
     while retry_count <= MAX_RETRIES:
-        if db.should_stop():
+        if DatabaseManager.get_instance().should_stop():
             return
 
         try:
@@ -186,7 +186,7 @@ def _execute_phase(agent: Agent, input_text: str, session: DBSession, max_turns:
             logger.exception("ModelBehaviorError: %s", mbe)
             retry_count += 1
             logger.warning("ModelBehaviorError (attempt %s): %s", retry_count, mbe)
-            db.save_message("system", f"System Feedback: {str(mbe)}", session_id=session.session_id)
+            DatabaseManager.get_instance().save_message("system", f"System Feedback: {str(mbe)}", session_id=session.session_id)
             current_input = "Please fix the previous error and continue."
         except BadRequestError as bre:
             retry_count += 1
@@ -201,7 +201,7 @@ def _execute_phase(agent: Agent, input_text: str, session: DBSession, max_turns:
             logger.warning("BadRequestError (attempt %s): %s", retry_count, short_error)
             
             # В базу тоже лучше писать сокращенную версию, чтобы не раздувать файл
-            db.save_message("system", f"System Feedback: {short_error}", session_id=session.session_id)
+            DatabaseManager.get_instance().save_message("system", f"System Feedback: {short_error}", session_id=session.session_id)
             current_input = "Reduce output length and continue."
         except Exception as e:
             # Тут тоже полезно обрезать, на всякий случай

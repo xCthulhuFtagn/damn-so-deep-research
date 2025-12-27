@@ -7,7 +7,7 @@ import json
 
 from logging_setup import setup_logging
 from research_agents import planner_agent, executor_agent
-import database
+from database import DatabaseManager
 from runner import runner
 from config import DB_PATH, MAX_TURNS
 import time
@@ -211,32 +211,32 @@ st.set_page_config(page_title="Deep Research Swarm MVP", layout="wide")
 if "messages" not in st.session_state:
     # При первом запуске инициализируем/чистим БД
     logger.info("First run: initializing DB and session state")
-    database.init_db()
+    DatabaseManager.get_instance().init_db()
     # Load history from DB
-    st.session_state.messages = database.load_messages()
+    st.session_state.messages = DatabaseManager.get_instance().load_messages()
     
 # Отслеживание прогресса для очистки памяти
 if "done_steps_count" not in st.session_state:
     # Initialize from DB to avoid false "memory cleared" on reload
-    st.session_state.done_steps_count = database.get_completed_steps_count()
+    st.session_state.done_steps_count = DatabaseManager.get_instance().get_completed_steps_count()
     logger.debug("Session state initialized: done_steps_count=%s", st.session_state.done_steps_count)
 
 # --- Sidebar ---
 st.sidebar.title("🎛️ Control Center")
 
 # Кнопка полной остановки (только если рой запущен)
-if database.is_swarm_running():
+if DatabaseManager.get_instance().is_swarm_running():
     drop_research_text = "🛑 Drop running research"
 else:
     drop_research_text = "🛑 Drop research"
 if st.sidebar.button("🛑 Drop research", type="primary"):
     logger.info("User requested stop")
-    database.set_stop_signal(True)
+    DatabaseManager.get_instance().set_stop_signal(True)
     st.toast("Stopping swarm...", icon="🛑")
     # Кнопка полного сброса (только если рой НЕ запущен)
     logger.info("User requested reset: clearing DB and UI state")
     st.toast("Clearing DB...", icon="🛑")
-    database.clear_db()
+    DatabaseManager.get_instance().clear_db()
     st.session_state.clear()
     st.rerun()
 
@@ -248,7 +248,7 @@ plan_container = st.sidebar.empty()
 def render_plan():
     with plan_container.container():
         try:
-            plan_df = database.get_all_plan()
+            plan_df = DatabaseManager.get_instance().get_all_plan()
             logger.debug("Loaded plan for sidebar: rows=%s", 0 if plan_df is None else len(plan_df))
             if not plan_df.empty:
                 # Красим статусы
@@ -273,9 +273,7 @@ render_plan()
 # Одобрение команд терминала
 st.sidebar.subheader("🛡️ Security Approvals")
 try:
-    conn = sqlite3.connect(DB_PATH)
-    approvals = pd.read_sql_query("SELECT * FROM approvals WHERE approved = 0", conn)
-    conn.close()
+    approvals = DatabaseManager.get_instance().get_pending_approvals()
     logger.debug("Loaded pending approvals: count=%s", len(approvals))
 except Exception:
     logger.exception("Failed to load approvals from DB")
@@ -288,18 +286,11 @@ if not approvals.empty:
         c1, c2 = st.sidebar.columns(2)
         if c1.button("✅ Approve", key=f"y_{row['command_hash']}"):
             logger.info("Approved terminal command: hash=%s", row["command_hash"])
-            c = sqlite3.connect(DB_PATH)
-            c.execute("UPDATE approvals SET approved=1 WHERE command_hash=?", (row['command_hash'],))
-            c.commit()
-            c.close()
+            DatabaseManager.get_instance().update_approval_status(row['command_hash'], 1)
             st.rerun()
         if c2.button("❌ Deny", key=f"n_{row['command_hash']}"):
             logger.info("Denied terminal command: hash=%s", row["command_hash"])
-            c = sqlite3.connect(DB_PATH)
-            # Use -1 as a sentinel for denied (SQLite doesn't enforce BOOLEAN strictly)
-            c.execute("UPDATE approvals SET approved=-1 WHERE command_hash=?", (row['command_hash'],))
-            c.commit()
-            c.close()
+            DatabaseManager.get_instance().update_approval_status(row['command_hash'], 1)
             st.rerun()
 else:
     st.sidebar.success("No pending actions")
@@ -309,7 +300,7 @@ st.title("🧠 Deep Research Agent Swarm")
 
 # Рендер истории
 # Always load fresh messages from DB to stay in sync with background runner
-st.session_state.messages = database.load_messages()
+st.session_state.messages = DatabaseManager.get_instance().load_messages()
 
 for msg in st.session_state.messages:
     # Defensive: ignore malformed rows (older runs could have role=None).
@@ -383,14 +374,14 @@ for msg in st.session_state.messages:
 # --- Logic for Running Swarm ---
 def start_swarm(prompt: str, start_agent_name="Planner"):
     # ОПРЕДЕЛЕНИЕ НАЧАЛЬНОГО АГЕНТА
-    plan_df = database.get_all_plan()
-    
+    plan_df = DatabaseManager.get_instance().get_all_plan()
+
     if start_agent_name == "Planner":
-         start_agent = planner_agent
+        start_agent = planner_agent
     elif start_agent_name == "Executor":
-         start_agent = executor_agent
+        start_agent = executor_agent
     else:
-         start_agent = planner_agent if plan_df.empty else executor_agent
+        start_agent = planner_agent if plan_df.empty else executor_agent
 
     logger.info("Starting swarm via runner: agent=%s", start_agent.name)
     # Передаем MAX_TURNS из конфига в раннер
@@ -398,23 +389,23 @@ def start_swarm(prompt: str, start_agent_name="Planner"):
     st.rerun()
 
 # --- Observer Loop (if swarm is running) ---
-if database.is_swarm_running():
+if DatabaseManager.get_instance().is_swarm_running():
     with st.status("🚀 Swarm is active...", expanded=True) as status:
         st.write("Agents are performing research steps...")
         # Polling loop
         last_msg_count = len(st.session_state.messages)
-        last_pending_approvals_count = database.get_pending_approvals_count()
-        while database.is_swarm_running():
+        last_pending_approvals_count = DatabaseManager.get_instance().get_pending_approvals_count()
+        while DatabaseManager.get_instance().is_swarm_running():
             time.sleep(2)
             # Check for new messages to trigger UI refresh
-            current_messages = database.load_messages()
+            current_messages = DatabaseManager.get_instance().load_messages()
             current_msg_count = len(current_messages)
-            current_pending_approvals_count = database.get_pending_approvals_count()
+            current_pending_approvals_count = DatabaseManager.get_instance().get_pending_approvals_count()
             if (current_msg_count != last_msg_count) or (current_pending_approvals_count != last_pending_approvals_count):
                 st.rerun()
             
         # Проверяем на ошибки перед финальным рендером
-        final_messages = database.load_messages()
+        final_messages = DatabaseManager.get_instance().load_messages()
         has_error = any("Error" in (m.get("content") or "") for m in final_messages if m["role"] == "system")
         
         if has_error:
@@ -426,11 +417,11 @@ if database.is_swarm_running():
         st.rerun()
 
 # Обработка ввода
-if prompt := st.chat_input("Input research topic...", disabled=database.is_swarm_running()):
+if prompt := st.chat_input("Input research topic...", disabled=DatabaseManager.get_instance().is_swarm_running()):
     logger.info("User prompt received: chars=%s", len(prompt))
     # We do NOT save to DB here; Runner will save it via session.add_items
     
     # Determine start agent
-    plan_df = database.get_all_plan()
+    plan_df = DatabaseManager.get_instance().get_all_plan()
     start_agent_name = "Planner" if plan_df.empty else "Executor"
     start_swarm(prompt=prompt, start_agent_name=start_agent_name)
