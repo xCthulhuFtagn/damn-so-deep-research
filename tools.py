@@ -1,14 +1,16 @@
 import trafilatura
-from sentence_transformers import SentenceTransformer, util
+from sentence_transformers import SentenceTransformer, CrossEncoder, util
 import torch
 import requests
 import subprocess
 import hashlib
 import logging
 import time
+import concurrent.futures
 from urllib.parse import urlparse
 import json
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from config import DB_PATH, NUM_SEARCHES_PER_CALL
 from database import DatabaseManager
 from logging_setup import setup_logging
@@ -19,97 +21,245 @@ logger = logging.getLogger(__name__)
 
 # --- External Tools ---
 
-embedder = SentenceTransformer('all-MiniLM-L6-v2', device='cpu')
+# --- Инициализация глобальных моделей ---
+# Загружаем один раз. Используем CPU, но если есть CUDA, torch сам может подхватить, если указать device='cuda'.
+# Bi-Encoder: быстрый первичный поиск. Multilingual v2 отлично работает с русским.
+bi_encoder = SentenceTransformer('sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2', device='cpu')
+
+# Cross-Encoder: точный реранкинг. MS Marco — стандарт для проверки релевантности "вопрос-ответ".
+cross_encoder = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2', device='cpu')
+
+# Глобальный сплиттер LangChain
+text_splitter = RecursiveCharacterTextSplitter(
+    chunk_size=800,        # Размер смыслового блока
+    chunk_overlap=150,     # Перекрытие для связности
+    separators=["\n\n", "\n", ". ", " ", ""],
+    length_function=len
+)
 
 @function_tool
 def intelligent_web_search(query: str) -> str:
     """
-    Выполняет поиск, скачивает страницы, очищает HTML и возвращает
-    только релевантные параграфы, ранжированные по смыслу.
+    Выполняет поиск информации в интернете с глубокой фильтрацией контента.
+    
+    Алгоритм:
+    1. Поиск ссылок через SearXNG.
+    2. Параллельное скачивание и умная нарезка (RecursiveCharacterTextSplitter + Merge).
+    3. Bi-Encoder: Векторизация всех чанков батчем и грубый отсев (Top-20).
+    4. Cross-Encoder: Точная перепроверка пар "Запрос-Чанк" (Reranking -> Top-3).
     """
-    # 1. Поиск через SearXNG (JSON)
     searx_url = "http://localhost:666/search"
+    
+    # --- Шаг 1: Получение ссылок ---
     try:
         params = {
             'q': query, 
             'format': 'json', 
             'language': 'ru',
-            'engines': 'google' # ,bing,duckduckgo' # Явно указываем движки
+            'engines': 'google'
         }
-        resp = requests.get(searx_url, params=params, timeout=5)
+        resp = requests.get(searx_url, params=params, timeout=10)
         resp.raise_for_status()
         data = resp.json()
         
-        # Если results нет, берем пустой список
-        search_results = data.get('results', [])[:NUM_SEARCHES_PER_CALL]
-        
-        if not search_results:
+        # Берем чуть больше ссылок, так как у нас теперь мощный фильтр
+        raw_results = data.get('results', [])[:6] 
+
+        if not raw_results:
             return "По вашему запросу ничего не найдено."
-            
+
     except Exception as e:
-        logger.exception("intelligent_web_search failed: query=%s, error=%s", query, e)
-        return f"Ошибка поиска: {e}"
+        logger.exception("intelligent_web_search error: %s", e)
+        return f"Ошибка поискового движка: {e}"
 
-    final_report = []
-    logger.info("intelligent_web_search: query='%s' urls: %s", query, [res.get('url') for res in search_results])
-    for res in search_results:
-        url = res.get('url')
-        title = res.get('title')
+    # --- Шаг 2: Параллельный процессинг ---
+    all_chunks = []
+    
+    # 5 потоков обычно достаточно для текстовых страниц, не перегружая сеть
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        future_to_url = {
+            executor.submit(fetch_and_process_url, res.get('url'), res.get('title')): res 
+            for res in raw_results
+        }
+        
+        for future in concurrent.futures.as_completed(future_to_url):
+            result = future.result()
+            if result:
+                all_chunks.extend(result)
 
-        domain = urlparse(url).netloc.lower()
-        blocked_domains = ['zhihu.com', 'youtube.com', 'bilibili.com', 'weibo.com']
+    if not all_chunks:
+        return "Не удалось извлечь контент из найденных страниц (возможно, защита от ботов или пустые страницы)."
+
+    # Лимит на обработку, чтобы CPU не умер на огромных статьях
+    # all_chunks = all_chunks[:300]
+
+    # --- Шаг 3: Bi-Encoder (Грубая фильтрация) ---
+    # Батчевая векторизация текстов
+    chunk_texts = [c['text'] for c in all_chunks]
+    
+    # Кодируем (convert_to_tensor=True для скорости в torch)
+    query_embed = bi_encoder.encode(query, convert_to_tensor=True)
+    corpus_embeds = bi_encoder.encode(chunk_texts, convert_to_tensor=True, show_progress_bar=False)
+    
+    # Косинусное сходство
+    top_k_coarse = min(20, len(all_chunks))
+    cos_scores = util.cos_sim(query_embed, corpus_embeds)[0]
+    
+    # Выбираем Top-K кандидатов
+    top_results = torch.topk(cos_scores, k=top_k_coarse)
+    
+    candidates = []
+    for score, idx in zip(top_results.values, top_results.indices):
+        idx = idx.item()
+        # Мягкий порог для Bi-Encoder (он часто занижает скоры)
+        if score.item() < 0.2: continue 
         
-        if any(bad in domain for bad in blocked_domains):
-            print(f"⏩ Пропуск (медленный домен): {domain}")
+        candidates.append(all_chunks[idx])
+
+    if not candidates:
+        return "Найдены тексты, но они не соответствуют контексту запроса (Bi-Encoder filter)."
+
+    # --- Шаг 4: Cross-Encoder (Точный реранкинг) ---
+    # Формируем пары [Query, Text]
+    cross_inp = [[query, item['text']] for item in candidates]
+    
+    # Предсказание (возвращает список float scores)
+    cross_scores = cross_encoder.predict(cross_inp)
+    
+    # Объединяем результат
+    scored_candidates = []
+    for i, item in enumerate(candidates):
+        scored_candidates.append({
+            'item': item,
+            'score': cross_scores[i]
+        })
+        
+    # Сортировка по убыванию релевантности
+    scored_candidates.sort(key=lambda x: x['score'], reverse=True)
+    
+    # --- Шаг 5: Формирование отчета ---
+    # Берем ТОП-3 самых лучших
+    final_top = scored_candidates[:3]
+    
+    # Берем ТОП-3 самых лучших
+    if not final_top:
+        return "Информация найдена, но отброшена фильтром Cross-Encoder как недостаточно точная."
+
+    # Группируем сниппеты по URL и сохраняем их вместе с исходными данными
+    grouped_snippets = {}
+    for entry in final_top:
+        score = entry['score']
+        item = entry['item']
+        url = item['url']
+
+        if score < -1.0: # Порог для Cross-Encoder (MS Marco). < 0 обычно значит "не релевантно"
             continue
+
+        if url not in grouped_snippets:
+            grouped_snippets[url] = {
+                'title': item['title'],
+                'snippets': [],
+                'max_score': -float('inf') # Для сортировки источников
+            }
         
-        # Пропуск бинарных файлов
-        if url.endswith(('.pdf', '.xml', '.doc', '.mp4', '.zip')):
-            continue
+        grouped_snippets[url]['snippets'].append({
+            'text': item['text'],
+            'score': score
+        })
+        grouped_snippets[url]['max_score'] = max(grouped_snippets[url]['max_score'], score)
+
+    # Сортируем источники по наивысшему баллу их сниппетов
+    sorted_urls = sorted(grouped_snippets.keys(), key=lambda url: grouped_snippets[url]['max_score'], reverse=True)
+
+    report_lines = []
+    for url in sorted_urls:
+        source_data = grouped_snippets[url]
+        header = f"Источник: {source_data['title']} ({url})"
+        report_lines.append(f"\n=== {header} ===")
+
+        # Сортируем сниппеты внутри источника по их баллам
+        sorted_source_snippets = sorted(source_data['snippets'], key=lambda s: s['score'], reverse=True)
         
-        # 2. Извлечение контента через Trafilatura
-        # fetch_url и extract работают очень быстро и не грузят GPU
+        for snippet_data in sorted_source_snippets:
+            clean_text = snippet_data['text'].replace("\n", " ").strip()
+            report_lines.append(clean_text)
+        
+    if not report_lines:
+        return "Информация найдена, но отброшена фильтром Cross-Encoder как недостаточно точная."
+
+    return "\n".join(report_lines)
+
+def fetch_and_process_url(url: str, title: str) -> List[Dict[str, Any]]:
+    """
+    Скачивает URL, чистит, нарезает и склеивает "огрызки" текста.
+    Запускается в отдельном потоке.
+    """
+    domain = urlparse(url).netloc.lower()
+    blocked_domains = ['youtube.com', 'bilibili.com', 'weibo.com', 'twitter.com', 'instagram.com']
+    
+    if any(bad in domain for bad in blocked_domains):
+        return []
+        
+    if url.endswith(('.pdf', '.xml', '.doc', '.docx', '.xls', '.mp4', '.zip', '.exe')):
+        return []
+
+    try:
+        # 1. Скачивание
         downloaded = trafilatura.fetch_url(url)
         if not downloaded:
-            continue
-            
-        clean_text = trafilatura.extract(downloaded, include_comments=False, include_tables=False)
-        
+            return []
+
+        # 2. Экстракция чистого текста
+        clean_text = trafilatura.extract(
+            downloaded, 
+            include_comments=False, 
+            include_tables=False, 
+            include_formatting=False
+        )
         if not clean_text:
-            continue
+            return []
 
-        # 3. Семантическая фильтрация (RAG on the Fly)
-        # Разбиваем текст на смысловые блоки (например, по 500 символов)
-        chunk_size = 500
-        chunks = [clean_text[i:i+chunk_size] for i in range(0, len(clean_text), chunk_size)]
-
-        if not chunks:
-            continue
-
-        # Кодируем запрос и чанки в векторы
-        query_embedding = embedder.encode(query, convert_to_tensor=True)
-        chunk_embeddings = embedder.encode(chunks, convert_to_tensor=True)
-
-        # Считаем схожесть
-        cos_scores = util.cos_sim(query_embedding, chunk_embeddings)[0]
+        # 3. Умная нарезка (LangChain)
+        raw_chunks = text_splitter.split_text(clean_text)
         
-        # Берем топ-2 лучших чанка из этой статьи
-        top_results = torch.topk(cos_scores, k=min(3, len(chunks)))
+        # 4. Логика "Smart Merge" (спасение маленьких чанков)
+        merged_chunks = []
+        min_chunk_len = 80 # Если меньше этого, пытаемся приклеить к предыдущему
         
-        relevant_snippets = []
-        for score, idx in zip(top_results.values, top_results.indices):
-            if score.item() > 0.3: # Порог релевантности
-                relevant_snippets.append(chunks[idx].replace("\n", " "))
+        for chunk in raw_chunks:
+            chunk = chunk.strip()
+            if not chunk: continue
+            
+            if len(chunk) >= min_chunk_len:
+                merged_chunks.append(chunk)
+            else:
+                # Если чанк маленький, клеим к предыдущему
+                if merged_chunks:
+                    prev = merged_chunks[-1]
+                    # Добавляем пробел или точку, если нужно
+                    sep = " " if prev.endswith(('.', '!', '?')) else ". "
+                    merged_chunks[-1] = f"{prev}{sep}{chunk}"
+                else:
+                    # Если это самый первый и он короткий — оставляем (вдруг это просто ответ "Да")
+                    merged_chunks.append(chunk)
+
+        # 5. Упаковка результатов
+        processed_chunks = []
+        for txt in merged_chunks:
+            # Финальная проверка на полный мусор
+            if len(txt) < 10: continue
+            
+            processed_chunks.append({
+                'text': txt,
+                'title': title,
+                'url': url
+            })
         
-        if relevant_snippets:
-            formatted_entry = f"Источник: {title} ({url})\n" + "\n".join(relevant_snippets)
-            final_report.append(formatted_entry)
+        return processed_chunks
 
-    if not final_report:
-        return "Удалось найти ссылки, но полезного контента на страницах не найдено (возможно, защита от ботов)."
-
-    # Собираем финальный контекст
-    return "\n\n".join(final_report)
+    except Exception as e:
+        logger.warning(f"Error processing {url}: {e}")
+        return []
 
 @function_tool
 def read_file(file_path: str) -> str:
