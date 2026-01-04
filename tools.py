@@ -140,8 +140,6 @@ def intelligent_web_search(query: str) -> str:
     # --- Шаг 5: Формирование отчета ---
     # Берем ТОП-3 самых лучших
     final_top = scored_candidates[:3]
-    
-    # Берем ТОП-3 самых лучших
     if not final_top:
         return "Информация найдена, но отброшена фильтром Cross-Encoder как недостаточно точная."
 

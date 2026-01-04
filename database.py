@@ -10,6 +10,20 @@ from logging_setup import setup_logging
 setup_logging()
 logger = logging.getLogger(__name__)
 
+
+# Marker strings that indicate a system failure or critical error.
+# If any of these are found in the tool output, we MUST NOT prune it.
+CRITICAL_ERROR_MARKERS = [
+    "Error:",
+    "Exception:",
+    "Traceback",
+    "Timeout",
+    "ConnectionRefused",
+    "Ошибка поискового движка", # Specific to intelligent_web_search
+    "failed to", # General failure indicator
+    "status code:", # often appears in HTTP errors
+]
+
 class DatabaseManager:
     _instance = None
     _instance_lock = threading.Lock()
@@ -366,24 +380,32 @@ class DatabaseManager:
     
     def prune_last_tool_message(self) -> bool:
         """
-        Находит последнее сообщение с ролью 'tool' (обычно это результат web_search или read_file)
-        и заменяет его содержимое на заглушку. Используется для экономии токенов после суммаризации.
+        Conditionally prunes the last tool message.
+        - Deletes content if it appears to be successful data (to save tokens).
+        - PRESERVES content if it contains error markers (so Strategist can fix it).
         """
         conn = self.get_connection()
         c = conn.cursor()
         try:
-            # 1. Ищем ID последнего сообщения от инструмента
-            # Мы сортируем по ID убыванию и берем первое, это и есть "последнее" событие
-            c.execute("SELECT id FROM messages WHERE role='tool' ORDER BY id DESC LIMIT 1")
+            # 1. Find the last tool message and fetch its content
+            c.execute("SELECT id, content FROM messages WHERE role='tool' ORDER BY id DESC LIMIT 1")
             row = c.fetchone()
             
             if row:
-                last_tool_msg_id = row[0]
-                # 2. Заменяем тяжелый контент на заглушку
+                msg_id, content = row
+                content_str = str(content) if content else ""
+
+                # 2. Check for Error Markers (Safety Check)
+                # Defined as a class constant
+                if any(marker.lower() in content_str.lower() for marker in CRITICAL_ERROR_MARKERS):
+                    logger.info(f"DB: Skipped pruning for msg ID {msg_id} due to detected error markers.")
+                    return False
+
+                # 3. If safe, replace heavy content with a placeholder
                 pruned_text = "[RAW DATA PRUNED. See summary in the next message arguments.]"
-                c.execute("UPDATE messages SET content = ? WHERE id = ?", (pruned_text, last_tool_msg_id))
+                c.execute("UPDATE messages SET content = ? WHERE id = ?", (pruned_text, msg_id))
                 conn.commit()
-                logger.info("DB: Pruned raw content of tool message ID %s", last_tool_msg_id)
+                logger.info("DB: Pruned raw content of tool message ID %s", msg_id)
                 return True
             else:
                 logger.warning("DB: Prune requested, but no tool message found.")
