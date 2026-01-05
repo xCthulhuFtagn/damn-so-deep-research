@@ -477,6 +477,42 @@ class DatabaseManager:
         conn.commit()
         conn.close()
 
+    def insert_plan_steps_atomic(self, new_steps: List[str], insert_after_step: int):
+        """
+        Вставляет новые шаги ПОСЛЕ указанного номера (insert_after_step).
+        Все существующие шаги с номером > insert_after_step сдвигаются вперед.
+        """
+        logger.info("DB: Inserting %d steps after step %d", len(new_steps), insert_after_step)
+        conn = self.get_connection()
+        c = conn.cursor()
+        
+        try:
+            # 1. Сдвигаем существующие будущие шаги "вниз"
+            # Если мы вставляем после 3-го шага, то старый 4-й станет (4 + len(new_steps)) и т.д.
+            shift_offset = len(new_steps)
+            c.execute(
+                "UPDATE plan SET step_number = step_number + ? WHERE step_number > ?", 
+                (shift_offset, insert_after_step)
+            )
+            
+            # 2. Вставляем новые шаги в образовавшееся "окно"
+            current_insert_num = insert_after_step + 1
+            for desc in new_steps:
+                c.execute(
+                    "INSERT INTO plan (description, step_number, status) VALUES (?, ?, 'TODO')", 
+                    (desc, current_insert_num)
+                )
+                current_insert_num += 1
+                
+            conn.commit()
+            logger.info("DB: Insert atomic success")
+        except Exception as e:
+            conn.rollback()
+            logger.error("DB: Insert atomic failed: %s", e)
+            raise e
+        finally:
+            conn.close()
+
 # --- Backward Compatibility Wrappers (Proxies to db instance) ---
 
 # Wrapper functions have been removed in favor of direct singleton access via `db`:

@@ -86,24 +86,29 @@ strategist_agent = Agent(
 You are the Strategist. Your goal is to recover from failed research steps.
 
 CRITICAL RULES:
-1. You MUST call `add_steps_to_plan` to add corrective actions.
-2. Use EXACT tool names.
-3. IMPORTANT: Corrective steps should focus on actionable research tasks to fix the failure.
-4. FORBIDDEN: Do NOT add steps like "generate report", "summarize findings", or "create summary" as corrective actions. Reporting and summarization MUST only occur at the very end of the overall research process.
+1. When a step fails, you typically need to insert intermediate corrective steps BEFORE moving to the rest of the original plan.
+2. Use `insert_corrective_steps` to inject new tasks immediately after the failed step. This shifts old future steps down.
+3. Only use `add_steps_to_plan` if you specifically want to append to the very END of the list.
+4. FORBIDDEN: Do NOT add reporting/summarization steps.
 
 WORKFLOW:
 1. Analyze the context (the system will provide the failure details).
-2. Call `add_steps_to_plan` with specific corrective steps.
-3. In the next turn, hand off to Executor to try again.
+2. Call `insert_corrective_steps` with specific corrective steps if the failure is present in the context.
+3. Call `add_steps_to_plan` to add steps to end of the plan if current plan showed itself insufficient to complete the task.
+4. In the next turn, hand off to Executor to try again.
 
 Available tools: add_steps_to_plan, get_recovery_context
 """,
     tools=[
+        tools.insert_corrective_steps,
         tools.add_steps_to_plan,
         tools.get_recovery_context
     ],
     handoffs=[handoff(executor_agent)],
-    model_settings=ModelSettings(parallel_tool_calls=False, tool_choice="required")
+    model_settings=ModelSettings(
+        parallel_tool_calls=False, 
+        tool_choice="required"
+    )
 )
 
 # 4. EVALUATOR
@@ -136,7 +141,10 @@ FORBIDDEN: Do not output text UNLESS the step is valid and you are finishing.
         tools.mark_step_failed,
     ],
     handoffs=[handoff(executor_agent), handoff(strategist_agent)],
-    model_settings=ModelSettings(parallel_tool_calls=False, tool_choice="required")
+    model_settings=ModelSettings(
+        parallel_tool_calls=False, 
+        tool_choice="required"
+    )
 )
 
 # 5. PLANNER
@@ -165,7 +173,7 @@ FORBIDDEN: Do not hand off. Do not add commentary.
     handoffs=[], # No handoffs, returns to Runner
     model_settings=ModelSettings(
         parallel_tool_calls=False,
-        tool_choice="auto" # Can output text
+        tool_choice="required"
     )
 )
 

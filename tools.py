@@ -548,3 +548,51 @@ Plan Status:
 Failed Step Context:
 {failed_context}
 """
+
+@function_tool
+def insert_corrective_steps(steps: List[str]) -> str:
+    """
+    Вставляет НОВЫЕ корректирующие шаги сразу после текущего АКТИВНОГО шага.
+    Все последующие шаги плана сдвигаются вниз.
+    
+    CRITICAL: Работает ТОЛЬКО если есть активная задача (active_task).
+    """
+    db = DatabaseManager.get_instance()
+    
+    # 1. Жесткая проверка контекста
+    active_task_num = db.get_active_task()
+    
+    if active_task_num is None:
+        logger.warning("insert_corrective_steps blocked: No active task.")
+        return "ERROR: No active task found. Corrective steps can only be inserted to fix a currently active (failed) task."
+
+    # 2. Нормализация входных данных
+    steps_list = []
+    # Обработка случая, если модель прислала JSON-строку вместо списка
+    if isinstance(steps, str):
+        import json
+        try:
+            steps = json.loads(steps)
+        except:
+            steps = [steps]
+            
+    if isinstance(steps, list):
+        for s in steps:
+            # Очищаем от нумерации, если модель её добавила (1., 2. и т.д.)
+            clean_s = str(s).strip()
+            import re
+            clean_s = re.sub(r'^\d+[\.\)]\s*', '', clean_s)
+            if clean_s:
+                steps_list.append(clean_s)
+    
+    if not steps_list:
+        return "ERROR: No valid text provided for steps."
+
+    # 3. Вызов метода БД
+    try:
+        # Вставляем ПОСЛЕ текущего активного
+        db.insert_plan_steps_atomic(steps_list, insert_after_step=active_task_num)
+        return f"SUCCESS: Inserted {len(steps_list)} corrective steps after Step {active_task_num}. Plan re-indexed."
+    except Exception as e:
+        logger.error(f"Failed to insert steps: {e}")
+        return f"SYSTEM ERROR during database update: {e}"
