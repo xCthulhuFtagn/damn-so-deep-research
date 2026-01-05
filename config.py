@@ -23,6 +23,9 @@ MAX_TURNS = int(os.getenv("MAX_TURNS", 25))
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", 3))
 MAX_SEARCH_RESULTS = int(os.getenv("MAX_SEARCH_RESULTS", 6))
 MAX_FINAL_TOP_CHUNKS = int(os.getenv("MAX_FINAL_TOP_CHUNKS", 3))
+MAX_CHUNK_SIZE = int(os.getenv("MAX_CHUNK_SIZE", 500))
+MIN_CHUNK_LEN_TO_MERGE = int(os.getenv("MIN_CHUNK_LEN_TO_MERGE", 100))
+CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", 150))
 
 # Путь к базе данных
 BASE_DIR = Path(__file__).resolve().parent

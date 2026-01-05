@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 import json
 from typing import List, Dict, Any
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from config import MAX_SEARCH_RESULTS, MAX_FINAL_TOP_CHUNKS
+from config import MAX_SEARCH_RESULTS, MAX_FINAL_TOP_CHUNKS, MAX_CHUNK_SIZE, MIN_CHUNK_LEN_TO_MERGE, CHUNK_OVERLAP
 from database import DatabaseManager
 from logging_setup import setup_logging
 from agents import function_tool
@@ -31,8 +31,8 @@ cross_encoder = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2', device='cpu
 
 # Глобальный сплиттер LangChain
 text_splitter = RecursiveCharacterTextSplitter(
-    chunk_size=800,        # Размер смыслового блока
-    chunk_overlap=150,     # Перекрытие для связности
+    chunk_size=MAX_CHUNK_SIZE,        # Размер смыслового блока
+    chunk_overlap=CHUNK_OVERLAP,     # Перекрытие для связности
     separators=["\n\n", "\n", ". ", " ", ""],
     length_function=len
 )
@@ -222,7 +222,7 @@ def fetch_and_process_url(url: str, title: str) -> List[Dict[str, Any]]:
         
         # 4. Логика "Smart Merge" (спасение маленьких чанков)
         merged_chunks = []
-        min_chunk_len = 80 # Если меньше этого, пытаемся приклеить к предыдущему
+        min_chunk_len = MIN_CHUNK_LEN_TO_MERGE # Если меньше этого, пытаемся приклеить к предыдущему
         
         for chunk in raw_chunks:
             chunk = chunk.strip()
