@@ -21,7 +21,8 @@ DB_NAME = os.getenv("DB_NAME", "research_state.db")
 MAX_TURNS = int(os.getenv("MAX_TURNS", 25))
 # Количество повторных попыток при сбоях модели
 MAX_RETRIES = int(os.getenv("MAX_RETRIES", 3))
-NUM_SEARCHES_PER_CALL = int(os.getenv("NUM_SEARCHES_PER_CALL", 3))
+MAX_SEARCH_RESULTS = int(os.getenv("MAX_SEARCH_RESULTS", 6))
+MAX_FINAL_TOP_CHUNKS = int(os.getenv("MAX_FINAL_TOP_CHUNKS", 3))
 
 # Путь к базе данных
 BASE_DIR = Path(__file__).resolve().parent

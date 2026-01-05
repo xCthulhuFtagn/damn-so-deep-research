@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 import json
 from typing import List, Dict, Any
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from config import DB_PATH, NUM_SEARCHES_PER_CALL
+from config import MAX_SEARCH_RESULTS, MAX_FINAL_TOP_CHUNKS
 from database import DatabaseManager
 from logging_setup import setup_logging
 from agents import function_tool
@@ -63,7 +63,7 @@ def intelligent_web_search(query: str) -> str:
         data = resp.json()
         
         # Берем чуть больше ссылок, так как у нас теперь мощный фильтр
-        raw_results = data.get('results', [])[:6] 
+        raw_results = data.get('results', [])[:MAX_SEARCH_RESULTS] 
 
         if not raw_results:
             return "По вашему запросу ничего не найдено."
@@ -139,7 +139,7 @@ def intelligent_web_search(query: str) -> str:
     
     # --- Шаг 5: Формирование отчета ---
     # Берем ТОП-3 самых лучших
-    final_top = scored_candidates[:3]
+    final_top = scored_candidates[:MAX_FINAL_TOP_CHUNKS]
     if not final_top:
         return "Информация найдена, но отброшена фильтром Cross-Encoder как недостаточно точная."
 
