@@ -202,9 +202,19 @@ def fetch_and_process_url(url: str, title: str) -> List[Dict[str, Any]]:
         return []
 
     try:
-        # 1. Скачивание
-        downloaded = trafilatura.fetch_url(url)
-        if not downloaded:
+        # 1. Скачивание (requests with timeout to avoid hanging)
+        try:
+            resp = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0 (compatible; ResearchBot/1.0)'})
+            resp.raise_for_status()
+            
+            # Check content type to avoid downloading binaries
+            content_type = resp.headers.get('Content-Type', '').lower()
+            if 'text/html' not in content_type and 'text/plain' not in content_type:
+                return []
+                
+            downloaded = resp.text
+        except Exception as e:
+            logger.debug(f"Failed to fetch {url}: {e}")
             return []
 
         # 2. Экстракция чистого текста

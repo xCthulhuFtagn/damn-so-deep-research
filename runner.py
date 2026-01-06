@@ -124,10 +124,15 @@ class SwarmRunner:
                         step_input = f"{current_input}\n{step_input}"
                         current_input = None # Clear after first use
                     
-                    # Run the swarm for this step.
-                    # It returns when the agent chain finishes (e.g. Evaluator says "Step Done").
-                    # If the agents loop forever, max_turns will catch them.
-                    _execute_phase(current_agent, step_input, session, max_turns, run_config)
+                    try:
+                        # Run the swarm for this step.
+                        # It returns when the agent chain finishes (e.g. Evaluator says "Step Done").
+                        # If the agents loop forever, max_turns will catch them.
+                        _execute_phase(current_agent, step_input, session, max_turns, run_config)
+                    except Exception as step_err:
+                        logger.error(f"Step {next_step['step_number']} failed with unhandled error: {step_err}")
+                        DatabaseManager.get_instance().update_step_status(next_step['id'], "FAILED", f"System Error: {str(step_err)}")
+                        # We don't raise here, so the while loop picks up the next step (or recovery)
                     
                     # Check if we should continue
                     # If the step is still IN_PROGRESS/TODO after the run, something might be wrong,
@@ -204,12 +209,18 @@ def _execute_phase(agent: Agent, input_text: str, session: DBSession, max_turns:
             DatabaseManager.get_instance().save_message("system", f"System Feedback: {short_error}", session_id=session.session_id)
             current_input = "Reduce output length and continue."
         except Exception as e:
-            # Тут тоже полезно обрезать, на всякий случай
+            retry_count += 1
             err_msg = str(e)
             short_err = err_msg[:500] + "... [TRUNCATED]" if len(err_msg) > 500 else err_msg
-            
-            logger.exception("Critical error in _execute_phase: %s", short_err)
-            raise e
+            logger.exception("Generic error in _execute_phase (attempt %s): %s", retry_count, short_err)
+            DatabaseManager.get_instance().save_message("system", f"System Error: {short_err}", session_id=session.session_id)
+            current_input = "An internal error occurred. Please try to recover or continue."
+            # Small delay to prevent tight loop
+            time.sleep(2)
+
+    # If we get here, we exhausted retries
+    raise RuntimeError(f"Swarm execution failed after {MAX_RETRIES} retries.")
+
 
 # Global instance
 runner = SwarmRunner()

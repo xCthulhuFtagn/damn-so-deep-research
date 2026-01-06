@@ -59,6 +59,9 @@ class DatabaseManager:
         conn = self.get_connection()
         c = conn.cursor()
         
+        # Enable WAL mode for better concurrency
+        c.execute("PRAGMA journal_mode=WAL;")
+        
             # Plan Table
         c.execute('''CREATE TABLE IF NOT EXISTS plan (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
