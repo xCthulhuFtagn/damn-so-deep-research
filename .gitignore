@@ -4,3 +4,4 @@ logs/
 research_state.db
 .venv/
 .cursor/
+research.db

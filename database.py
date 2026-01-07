@@ -149,6 +149,10 @@ class DatabaseService:
             row = conn.execute("SELECT title FROM runs WHERE id = ?", (run_id,)).fetchone()
         return row["title"] if row else None
 
+    def update_run_title(self, run_id: str, new_title: str):
+        with self.get_connection() as conn:
+            conn.execute("UPDATE runs SET title = ? WHERE id = ?", (new_title, run_id))
+
     def get_user_runs(self, user_id: str) -> List[Dict]:
         with self.get_connection() as conn:
             return [dict(row) for row in conn.execute("SELECT id, title, status, created_at FROM runs WHERE user_id = ? ORDER BY created_at DESC", (user_id,)).fetchall()]
