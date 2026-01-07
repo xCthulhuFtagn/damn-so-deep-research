@@ -1,522 +1,298 @@
 import sqlite3
-import threading
 import pandas as pd
 import json
 import logging
-from typing import List, Optional, Any, Dict
-from config import DB_PATH 
+import uuid
+import bcrypt
+from typing import List, Optional, Dict
+
+from config import DB_PATH
 from logging_setup import setup_logging
+from schema import ChatMessage
 
 setup_logging()
 logger = logging.getLogger(__name__)
 
-
-# Marker strings that indicate a system failure or critical error.
-# If any of these are found in the tool output, we MUST NOT prune it.
+# Marker strings for critical errors
 CRITICAL_ERROR_MARKERS = [
-    "Error:",
-    "Exception:",
-    "Traceback",
-    "Timeout",
-    "ConnectionRefused",
-    "Ошибка поискового движка", # Specific to intelligent_web_search
-    "failed to", # General failure indicator
-    "status code:", # often appears in HTTP errors
+    "Error:", "Exception:", "Traceback", "Timeout", "ConnectionRefused",
+    "Ошибка поискового движка", "failed to", "status code:"
 ]
 
-class DatabaseManager:
-    _instance = None
-    _instance_lock = threading.Lock()
-
-    def __new__(cls):
-        # Оптимизация: сначала проверяем без лока (быстро)
-        if cls._instance is None:
-            with cls._instance_lock:
-                # Вторая проверка под локом (Double-Checked Locking)
-                if cls._instance is None:
-                    cls._instance = super(DatabaseManager, cls).__new__(cls)
-                    
-                    # --- ИНИЦИАЛИЗАЦИЯ ПРЯМО ЗДЕСЬ ---
-                    # Делаем всё здесь, чтобы гарантировать выполнение 1 раз
-                    # и под защитой лока.
-                    cls._instance.db_path = DB_PATH
-                    cls._instance._active_task_number = None
-                    cls._instance.init_db() 
-                    # ---------------------------------
-                    
-        return cls._instance
-
-    def __init__(self):
-        # __init__ будет вызываться Python'ом каждый раз при DatabaseManager(),
-        # но нам он больше не нужен, так как всё сделано в __new__.
-        pass
+class DatabaseService:
+    def __init__(self, db_path: str = DB_PATH):
+        self.db_path = db_path
+        self.init_db()
 
     def get_connection(self):
-        return sqlite3.connect(self.db_path, timeout=30)
+        # Enables WAL mode for better concurrency every time a connection is made.
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.row_factory = sqlite3.Row
+        return conn
 
     def init_db(self):
         logger.info("DB init: path=%s", self.db_path)
-        conn = self.get_connection()
-        c = conn.cursor()
-        
-        # Enable WAL mode for better concurrency
-        c.execute("PRAGMA journal_mode=WAL;")
-        
-            # Plan Table
-        c.execute('''CREATE TABLE IF NOT EXISTS plan (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        step_number INTEGER,
-                        description TEXT,
-                        status TEXT DEFAULT 'TODO', 
-                        result TEXT,
-                        feedback TEXT
-                    )''')
-        
-            # Approvals Table
-        c.execute('''CREATE TABLE IF NOT EXISTS approvals (
-                        command_hash TEXT PRIMARY KEY,
-                        command_text TEXT,
-                        approved BOOLEAN DEFAULT 0
-                    )''')
-        
-            # Messages Table (Updated with session_id and task_number)
-        c.execute('''CREATE TABLE IF NOT EXISTS messages (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        role TEXT,
-                        content TEXT,
-                        tool_calls TEXT,
-                        tool_call_id TEXT,
-                        sender TEXT,
-                            session_id TEXT DEFAULT 'default',
-                            task_number INTEGER,
-                        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-                    )''')
-    
-        # Check for new columns in messages if table exists (migration)
-        c.execute("PRAGMA table_info(messages)")
-        columns = [info[1] for info in c.fetchall()]
-        if 'session_id' not in columns:
-            logger.info("Migrating DB: adding session_id to messages")
-            c.execute("ALTER TABLE messages ADD COLUMN session_id TEXT DEFAULT 'default'")
-            c.execute("CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id)")
-        
-        if 'task_number' not in columns:
-            logger.info("Migrating DB: adding task_number to messages")
-            c.execute("ALTER TABLE messages ADD COLUMN task_number INTEGER")
-            c.execute("CREATE INDEX IF NOT EXISTS idx_messages_task_number ON messages(task_number)")
+        with self.get_connection() as conn:
+            c = conn.cursor()
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS users (
+                    id TEXT PRIMARY KEY, username TEXT UNIQUE, password_hash TEXT,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS runs (
+                    id TEXT PRIMARY KEY, user_id TEXT, title TEXT, status TEXT DEFAULT 'active',
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(user_id) REFERENCES users(id)
+                )
+            ''')
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS plan (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT, step_number INTEGER,
+                    description TEXT, status TEXT DEFAULT 'TODO', result TEXT, feedback TEXT,
+                    FOREIGN KEY(run_id) REFERENCES runs(id)
+                )
+            ''')
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS approvals (
+                    command_hash TEXT, run_id TEXT, command_text TEXT, approved INTEGER DEFAULT 0,
+                    PRIMARY KEY (run_id, command_hash), FOREIGN KEY(run_id) REFERENCES runs(id)
+                )
+            ''')
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT, role TEXT, content TEXT,
+                    tool_calls TEXT, tool_call_id TEXT, sender TEXT, session_id TEXT,
+                    task_number INTEGER, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY(run_id) REFERENCES runs(id)
+                )
+            ''')
+            c.execute('''
+                CREATE TABLE IF NOT EXISTS run_state (
+                    run_id TEXT, key TEXT, value TEXT,
+                    PRIMARY KEY (run_id, key), FOREIGN KEY(run_id) REFERENCES runs(id)
+                )
+            ''')
+
+            # --- Lightweight Migration ---
+            def add_column_if_not_exists(table_name, column_name, column_type):
+                c.execute(f"PRAGMA table_info({table_name})")
+                columns = [info['name'] for info in c.fetchall()]
+                if column_name not in columns:
+                    logger.info(f"Migrating DB: adding {column_name} to {table_name}")
+                    c.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
+
+            add_column_if_not_exists("messages", "run_id", "TEXT")
+            add_column_if_not_exists("plan", "run_id", "TEXT")
+            add_column_if_not_exists("approvals", "run_id", "TEXT")
             
-        # Global State Table
-        c.execute('''CREATE TABLE IF NOT EXISTS global_state (
-                        key TEXT PRIMARY KEY,
-                        value INTEGER
-                    )''')
-        
-        c.execute("INSERT OR IGNORE INTO global_state (key, value) VALUES ('swarm_running', 0)")
-        c.execute("INSERT OR IGNORE INTO global_state (key, value) VALUES ('stop_requested', 0)")
-        
-        conn.commit()
-        conn.close()
+            # Recreate approvals table if it has the old primary key
+            c.execute("PRAGMA table_info(approvals)")
+            cols = {info['name']: info for info in c.fetchall()}
+            if 'run_id' in cols and not cols['run_id']['pk']:
+                logger.info("Recreating approvals table for new composite primary key.")
+                c.execute("DROP TABLE approvals")
+                c.execute('''
+                    CREATE TABLE approvals (
+                        command_hash TEXT, run_id TEXT, command_text TEXT, approved INTEGER DEFAULT 0,
+                        PRIMARY KEY (run_id, command_hash), FOREIGN KEY(run_id) REFERENCES runs(id)
+                    )
+                ''')
+
+
+            c.execute("CREATE INDEX IF NOT EXISTS idx_messages_run_id ON messages(run_id)")
+            conn.commit()
         logger.debug("DB init done")
 
     def clear_db(self):
-        """Очистка базы для новой сессии"""
-        logger.info("DB clear: deleting plan + approvals + messages")
-        conn = self.get_connection()
-        c = conn.cursor()
-        c.execute("DELETE FROM plan")
-        c.execute("DELETE FROM approvals")
-        c.execute("DELETE FROM messages")
-        # Сбрасываем флаги в global_state
-        c.execute("UPDATE global_state SET value = 0 WHERE key = 'swarm_running'")
-        c.execute("UPDATE global_state SET value = 0 WHERE key = 'stop_requested'")
-        conn.commit()
-        conn.close()
+        logger.info("Clearing all data from all tables")
+        with self.get_connection() as conn:
+            c = conn.cursor()
+            for table in ["plan", "approvals", "messages", "run_state", "runs", "users"]:
+                c.execute(f"DELETE FROM {table}")
+            conn.commit()
         logger.debug("DB clear done")
 
-# --- Global State Operations ---
-
-    def set_swarm_running(self, running: bool):
-        val = 1 if running else 0
-        conn = self.get_connection()
-        c = conn.cursor()
-        c.execute("UPDATE global_state SET value = ? WHERE key = 'swarm_running'", (val,))
-        if not running:
-            c.execute("UPDATE global_state SET value = 0 WHERE key = 'stop_requested'")
-        conn.commit()
-        conn.close()
-
-    def is_swarm_running(self) -> bool:
-        conn = self.get_connection()
-        c = conn.cursor()
-        row = c.execute("SELECT value FROM global_state WHERE key = 'swarm_running'").fetchone()
-        conn.close()
-        return bool(row[0]) if row else False
-
-    def set_stop_signal(self, requested: bool):
-        val = 1 if requested else 0
-        conn = self.get_connection()
-        c = conn.cursor()
-        c.execute("UPDATE global_state SET value = ? WHERE key = 'stop_requested'", (val,))
-        conn.commit()
-        conn.close()
-
-    def should_stop(self) -> bool:
-        conn = self.get_connection()
-        c = conn.cursor()
-        row = c.execute("SELECT value FROM global_state WHERE key = 'stop_requested'").fetchone()
-        conn.close()
-        return bool(row[0]) if row else False
-
-    # --- Task Context ---
-
-    def set_active_task(self, task_number: Optional[int]):
-        self._active_task_number = task_number
-        logger.debug("Set active task number: %s", task_number)
-
-    def get_active_task(self) -> Optional[int]:
-        return self._active_task_number
-
-    @classmethod
-    def get_instance(cls) -> "DatabaseManager":
-        """Return the singleton instance (alias for cls())."""
-        return cls()
-
-    @classmethod
-    def reset_instance(cls) -> None:
-        """Reset the singleton instance (use for testing resets)."""
-        with cls._instance_lock:
-            cls._instance = None
-
-# --- Plan Operations ---
-
-    def add_plan_step(self, description, step_number):
-        logger.info("DB add_plan_step: step_number=%s", step_number)
-        conn = self.get_connection()
-        c = conn.cursor()
-        c.execute("INSERT INTO plan (description, step_number) VALUES (?, ?)", (description, step_number))
-        conn.commit()
-        conn.close()
-
-    def get_next_step(self):
-        conn = self.get_connection()
-        df = pd.read_sql_query("SELECT * FROM plan WHERE status IN ('TODO', 'IN_PROGRESS') ORDER BY step_number LIMIT 1", conn)
-        conn.close()
-        return df.iloc[0] if not df.empty else None
-
-    def update_step_status(self, step_id, status, result=None):
-        logger.info("DB update_step_status: step_id=%s status=%s", step_id, status)
-        conn = self.get_connection()
-        c = conn.cursor()
-        if result:
-            c.execute("UPDATE plan SET status = ?, result = ? WHERE id = ?", (status, result, step_id))
-        else:
-            c.execute("UPDATE plan SET status = ? WHERE id = ?", (status, step_id))
-        conn.commit()
-        conn.close()
-
-    def get_all_plan(self):
-        conn = self.get_connection()
-        df = pd.read_sql_query("SELECT * FROM plan ORDER BY step_number", conn)
-        conn.close()
-        return df
-
-    def get_max_step_number(self) -> int:
-        conn = self.get_connection()
-        c = conn.cursor()
-        row = c.execute("SELECT COALESCE(MAX(step_number), 0) FROM plan").fetchone()
-        conn.close()
-        return int(row[0]) if row and row[0] is not None else 0
-
-    def get_existing_step_numbers(self) -> set[int]:
-        conn = self.get_connection()
-        c = conn.cursor()
-        rows = c.execute("SELECT step_number FROM plan").fetchall()
-        conn.close()
-        return {int(r[0]) for r in rows}
-
-    def get_completed_steps_count(self):
-        conn = self.get_connection()
-        c = conn.cursor()
-        count = c.execute("SELECT COUNT(*) FROM plan WHERE status='DONE'").fetchone()[0]
-        conn.close()
-        return count
-
-    def get_done_results_text(self):
-        conn = self.get_connection()
-        df = pd.read_sql_query("SELECT step_number, description, result FROM plan WHERE status='DONE' ORDER BY step_number", conn)
-        conn.close()
-        if df.empty:
-            return "No completed steps yet."
-        text = "COMPLETED RESEARCH STEPS:\n"
-        for _, row in df.iterrows():
-            text += f"Step {row['step_number']}: {row['description']}\nResult: {row['result']}\n{'-'*20}\n"
-        return text
-
-    def get_plan_summary(self) -> str:
-        """Returns a compact status list of all steps."""
-        df = self.get_all_plan()
-        if df.empty:
-            return "Plan is empty."
-        summary = []
-        for _, row in df.iterrows():
-            summary.append(f"Step {row['step_number']}: {row['status']} - {row['description']}")
-        return "\n".join(summary)
-
-    def get_active_step_description(self) -> str:
-        """Return the description of the current active step from the plan.
-
-        Looks for the next actionable step (IN_PROGRESS or TODO) and returns its description.
-        Falls back to generic messages if no active step is found.
-        """
-        # Reuse existing in-memory plan overview
-        df = self.get_all_plan()
-        if df.empty:
-            return "Waiting for plan."
-
-        conn = self.get_connection()
+    # --- User & Auth Methods ---
+    def register_user(self, username: str, password: str) -> Optional[str]:
+        hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
+        user_id = str(uuid.uuid4())
         try:
-            active_df = pd.read_sql_query(
-                "SELECT description FROM plan WHERE status IN ('IN_PROGRESS', 'TODO') "
-                "ORDER BY status ASC, step_number ASC LIMIT 1",
-                conn
-            )
-        finally:
-            conn.close()
+            with self.get_connection() as conn:
+                conn.execute(
+                    "INSERT INTO users (id, username, password_hash) VALUES (?, ?, ?)",
+                    (user_id, username, hashed_password.decode('utf-8'))
+                )
+            return user_id
+        except sqlite3.IntegrityError:
+            logger.warning(f"Username '{username}' already exists.")
+            return None
 
-        if not active_df.empty:
-            return str(active_df.iloc[0]['description'])
-        return "No active research step."
+    def authenticate_user(self, username: str, password: str) -> Optional[str]:
+        with self.get_connection() as conn:
+            user_row = conn.execute("SELECT id, password_hash FROM users WHERE username = ?", (username,)).fetchone()
+        if user_row and bcrypt.checkpw(password.encode('utf-8'), user_row["password_hash"].encode('utf-8')):
+            return user_row["id"]
+        return None
 
-# --- Message Persistence ---
+    # --- Run Management ---
+    def create_run(self, user_id: str, initial_prompt: str) -> str:
+        run_id = str(uuid.uuid4())
+        with self.get_connection() as conn:
+            conn.execute("INSERT INTO runs (id, user_id, title) VALUES (?, ?, ?)", (run_id, user_id, initial_prompt))
+        return run_id
 
-    def save_message(self, role: str, content: str, tool_calls: list = None, tool_call_id: str = None, sender: str = None, session_id: str = "default"):
-        conn = self.get_connection()
-        c = conn.cursor()
-        tool_calls_json = json.dumps(tool_calls) if tool_calls else None
+    def get_run_title(self, run_id: str) -> Optional[str]:
+        with self.get_connection() as conn:
+            row = conn.execute("SELECT title FROM runs WHERE id = ?", (run_id,)).fetchone()
+        return row["title"] if row else None
+
+    def get_user_runs(self, user_id: str) -> List[Dict]:
+        with self.get_connection() as conn:
+            return [dict(row) for row in conn.execute("SELECT id, title, status, created_at FROM runs WHERE user_id = ? ORDER BY created_at DESC", (user_id,)).fetchall()]
+
+    # --- State Operations (Per Run) ---
+    def _set_run_state(self, run_id: str, key: str, value: str):
+        with self.get_connection() as conn:
+            conn.execute("INSERT OR REPLACE INTO run_state (run_id, key, value) VALUES (?, ?, ?)", (run_id, key, value))
+
+    def _get_run_state(self, run_id: str, key: str) -> Optional[str]:
+        with self.get_connection() as conn:
+            row = conn.execute("SELECT value FROM run_state WHERE run_id = ? AND key = ?", (run_id, key)).fetchone()
+        return row["value"] if row else None
+
+    def set_swarm_running(self, run_id: str, running: bool):
+        self._set_run_state(run_id, 'swarm_running', '1' if running else '0')
+        if not running: self.set_stop_signal(run_id, False)
+
+    def is_swarm_running(self, run_id: str) -> bool:
+        return self._get_run_state(run_id, 'swarm_running') == '1'
+
+    def set_stop_signal(self, run_id: str, requested: bool):
+        self._set_run_state(run_id, 'stop_requested', '1' if requested else '0')
+
+    def should_stop(self, run_id: str) -> bool:
+        return self._get_run_state(run_id, 'stop_requested') == '1'
         
-        # Use explicit task_number if provided via set_active_task (Task-Scoped Memory)
-        task_num = self.get_active_task()
-        
-        c.execute(
-                "INSERT INTO messages (role, content, tool_calls, tool_call_id, sender, session_id, task_number) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (role, content, tool_calls_json, tool_call_id, sender, session_id, task_num)
-        )
-        conn.commit()
-        conn.close()
-        logger.debug("DB save_message: role=%s session=%s task=%s", role, session_id, task_num)
+    def set_active_task(self, run_id: str, task_number: Optional[int]):
+        self._set_run_state(run_id, 'active_task', str(task_number) if task_number is not None else '')
 
-    def load_messages(self, session_id: str = None):
-        """Loads messages, optionally filtering by session_id."""
-        conn = self.get_connection()
-        c = conn.cursor()
-        if session_id:
-            c.execute("SELECT role, content, tool_calls, tool_call_id, sender, session_id, task_number FROM messages WHERE session_id = ? ORDER BY id", (session_id,))
-        else:
-            c.execute("SELECT role, content, tool_calls, tool_call_id, sender, session_id, task_number FROM messages ORDER BY id")
-        rows = c.fetchall()
-        conn.close()
-        return self._rows_to_dicts(rows)
+    def get_active_task(self, run_id: str) -> Optional[int]:
+        task_str = self._get_run_state(run_id, 'active_task')
+        return int(task_str) if task_str and task_str.isdigit() else None
 
-    def get_messages_for_task(self, session_id: str, task_number: int):
-        conn = self.get_connection()
-        c = conn.cursor()
-        c.execute(
-            "SELECT role, content, tool_calls, tool_call_id, sender, session_id, task_number FROM messages WHERE session_id = ? AND task_number = ? ORDER BY id", 
-            (session_id, task_number)
-        )
-        rows = c.fetchall()
-        conn.close()
-        return self._rows_to_dicts(rows)
+    # --- Plan Operations (Per Run) ---
+    def add_plan_step(self, run_id: str, description: str, step_number: int):
+        with self.get_connection() as conn:
+            conn.execute("INSERT INTO plan (run_id, description, step_number) VALUES (?, ?, ?)", (run_id, description, step_number))
 
-    def get_last_n_messages(self, session_id: str, n: int):
-        conn = self.get_connection()
-        c = conn.cursor()
-        # Subquery to get last N then order ASC
-        c.execute(f'''
-        SELECT role, content, tool_calls, tool_call_id, sender, session_id, task_number 
-        FROM (
-                SELECT * FROM messages 
-                WHERE session_id = ?
-            ORDER BY id DESC 
-            LIMIT ?
-        ) 
-        ORDER BY id ASC
-        ''', (session_id, n))
-        rows = c.fetchall()
-        conn.close()
-        return self._rows_to_dicts(rows)
+    def get_next_step(self, run_id: str) -> Optional[Dict]:
+        with self.get_connection() as conn:
+            row = conn.execute("SELECT * FROM plan WHERE run_id = ? AND status IN ('TODO', 'IN_PROGRESS') ORDER BY step_number LIMIT 1", (run_id,)).fetchone()
+        return dict(row) if row else None
 
-    def _rows_to_dicts(self, rows):
-        messages = []
-        for row in rows:
-            role, content, tool_calls_json, tool_call_id, sender, session_id, task_number = row
-            msg = {
-                "role": role,
-                "content": content if content is not None else "", # Добавлена эта часть
-                "sender": sender,
-                    "tool_call_id": tool_call_id,
-                    "session_id": session_id,
-                    "task_number": task_number
-            }
-            if tool_calls_json:
-                try:
-                    msg["tool_calls"] = json.loads(tool_calls_json)
-                except:
-                    pass
-            messages.append(msg)
-        return messages
-
-    def get_initial_user_prompt(self, session_id: str = None) -> str | None:
-        conn = self.get_connection()
-        c = conn.cursor()
-        query = "SELECT content FROM messages WHERE role='user'"
-        params = []
-        if session_id:
-            query += " AND session_id=?"
-            params.append(session_id)
-        query += " ORDER BY id ASC LIMIT 1"
-        
-        c.execute(query, tuple(params))
-        row = c.fetchone()
-        conn.close()
-        return str(row[0]) if row and row[0] else None
-    
-    def prune_last_tool_message(self) -> bool:
-        """
-        Conditionally prunes the last tool message.
-        - Deletes content if it appears to be successful data (to save tokens).
-        - PRESERVES content if it contains error markers (so Strategist can fix it).
-        """
-        conn = self.get_connection()
-        c = conn.cursor()
-        try:
-            # 1. Find the last tool message and fetch its content
-            c.execute("SELECT id, content FROM messages WHERE role='tool' ORDER BY id DESC LIMIT 1")
-            row = c.fetchone()
-            
-            if row:
-                msg_id, content = row
-                content_str = str(content) if content else ""
-
-                # 2. Check for Error Markers (Safety Check)
-                # Defined as a class constant
-                if any(marker.lower() in content_str.lower() for marker in CRITICAL_ERROR_MARKERS):
-                    logger.info(f"DB: Skipped pruning for msg ID {msg_id} due to detected error markers.")
-                    return False
-
-                # 3. If safe, replace heavy content with a placeholder
-                pruned_text = "[RAW DATA PRUNED. See summary in the next message arguments.]"
-                c.execute("UPDATE messages SET content = ? WHERE id = ?", (pruned_text, msg_id))
-                conn.commit()
-                logger.info("DB: Pruned raw content of tool message ID %s", msg_id)
-                return True
+    def update_step_status(self, step_id: int, status: str, result: Optional[str] = None):
+        with self.get_connection() as conn:
+            if result:
+                conn.execute("UPDATE plan SET status = ?, result = ? WHERE id = ?", (status, result, step_id))
             else:
-                logger.warning("DB: Prune requested, but no tool message found.")
-                return False
-                
-        except Exception as e:
-            logger.error("DB: Failed to prune tool message: %s", e)
-            return False
-        finally:
-            conn.close()
+                conn.execute("UPDATE plan SET status = ? WHERE id = ?", (status, step_id))
 
-    # --- Approvals ---
+    def get_all_plan(self, run_id: str) -> pd.DataFrame:
+        return pd.read_sql_query("SELECT * FROM plan WHERE run_id = ? ORDER BY step_number", self.get_connection(), params=(run_id,))
 
-    def has_pending_approvals(self) -> bool:
-        conn = self.get_connection()
-        c = conn.cursor()
-        row = c.execute("SELECT COUNT(*) FROM approvals WHERE approved = 0").fetchone()
-        conn.close()
-        return bool(row[0]) if row else False
-
-    # --- UI Helpers ---
-
-    def prune_messages_for_ui(self):
-        """Clean up database messages."""
-        conn = self.get_connection()
-        c = conn.cursor()
-        c.execute(
-            """
-            DELETE FROM messages
-            WHERE
-            role = 'tool'
-            OR (role = 'assistant' AND tool_calls IS NOT NULL)
-            OR (role = 'assistant' AND (content IS NULL OR TRIM(content) = ''))
-            OR (
-                role = 'system'
-                AND (
-                content IS NULL
-                OR (content NOT LIKE '%Error%' AND LOWER(content) NOT LIKE '%failed%')
-                )
-            )
-            """
-        )
-        conn.commit()
-        conn.close()
-
-
-    def get_pending_approvals_count(self) -> int:
-        """Return number of pending terminal approvals (approved = 0)."""
-        try:
-            conn = self.get_connection()
-            c = conn.cursor()
-            row = c.execute("SELECT COUNT(*) FROM approvals WHERE approved = 0").fetchone()
-            conn.close()
-            return int(row[0]) if row and row[0] is not None else 0
-        except Exception:
-            logger.exception("DatabaseManager: failed to count pending approvals")
-            return 0
-
-    def get_pending_approvals(self) -> pd.DataFrame:
-        conn = self.get_connection()
-        df = pd.read_sql_query("SELECT * FROM approvals WHERE approved = 0", conn)
-        conn.close()
-        return df
-
-    def update_approval_status(self, command_hash: str, status: int):
-        conn = self.get_connection()
-        c = conn.cursor()
-        c.execute("UPDATE approvals SET approved=? WHERE command_hash=?", (status, command_hash))
-        conn.commit()
-        conn.close()
-
-    def insert_plan_steps_atomic(self, new_steps: List[str], insert_after_step: int):
-        """
-        Вставляет новые шаги ПОСЛЕ указанного номера (insert_after_step).
-        Все существующие шаги с номером > insert_after_step сдвигаются вперед.
-        """
-        logger.info("DB: Inserting %d steps after step %d", len(new_steps), insert_after_step)
-        conn = self.get_connection()
-        c = conn.cursor()
+    def get_max_step_number(self, run_id: str) -> int:
+        with self.get_connection() as conn:
+            row = conn.execute("SELECT COALESCE(MAX(step_number), 0) FROM plan WHERE run_id = ?", (run_id,)).fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
         
-        try:
-            # 1. Сдвигаем существующие будущие шаги "вниз"
-            # Если мы вставляем после 3-го шага, то старый 4-й станет (4 + len(new_steps)) и т.д.
-            shift_offset = len(new_steps)
-            c.execute(
-                "UPDATE plan SET step_number = step_number + ? WHERE step_number > ?", 
-                (shift_offset, insert_after_step)
-            )
+    def get_existing_step_numbers(self, run_id: str) -> set[int]:
+        with self.get_connection() as conn:
+            rows = conn.execute("SELECT step_number FROM plan WHERE run_id = ?", (run_id,)).fetchall()
+        return {int(r["step_number"]) for r in rows}
+
+    def get_done_results_text(self, run_id: str) -> str:
+        df = pd.read_sql_query("SELECT step_number, description, result FROM plan WHERE run_id = ? AND status='DONE' ORDER BY step_number", self.get_connection(), params=(run_id,))
+        if df.empty: return "No completed steps yet."
+        return "COMPLETED RESEARCH STEPS:\n" + "\n".join(f"Step {row['step_number']}: {row['description']}\nResult: {row['result']}\n{'-'*20}" for _, row in df.iterrows())
+
+    # --- Message Persistence (Per Run) ---
+    def save_message(self, run_id: str, role: str, content: str, tool_calls: Optional[list] = None, tool_call_id: Optional[str] = None, sender: Optional[str] = None, session_id: str = "default"):
+        task_num = self.get_active_task(run_id)
+        with self.get_connection() as conn:
+            conn.execute("INSERT INTO messages (run_id, role, content, tool_calls, tool_call_id, sender, session_id, task_number) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                         (run_id, role, content, json.dumps(tool_calls) if tool_calls else None, tool_call_id, sender, session_id, task_num))
+
+    def load_messages(self, run_id: str) -> List[ChatMessage]:
+        with self.get_connection() as conn:
+            return [self._row_to_chat_message(row) for row in conn.execute("SELECT * FROM messages WHERE run_id = ? ORDER BY id", (run_id,)).fetchall()]
+        
+    def get_messages_for_task(self, run_id: str, task_number: int) -> List[ChatMessage]:
+        with self.get_connection() as conn:
+            return [self._row_to_chat_message(row) for row in conn.execute("SELECT * FROM messages WHERE run_id = ? AND task_number = ? ORDER BY id", (run_id, task_number)).fetchall()]
+        
+    def _row_to_chat_message(self, row: sqlite3.Row) -> ChatMessage:
+        data = dict(row)
+        if data.get("tool_calls"):
+            try:
+                data["tool_calls"] = json.loads(data["tool_calls"])
+            except (json.JSONDecodeError, TypeError):
+                data["tool_calls"] = None
+        return ChatMessage(**data)
+
+    # --- Approvals (Per Run) ---
+    def get_pending_approvals(self, run_id: str) -> pd.DataFrame:
+        return pd.read_sql_query("SELECT * FROM approvals WHERE run_id = ? AND approved = 0", self.get_connection(), params=(run_id,))
+
+    def update_approval_status(self, run_id: str, command_hash: str, status: int):
+        with self.get_connection() as conn:
+            conn.execute("UPDATE approvals SET approved=? WHERE run_id=? AND command_hash=?", (status, run_id, command_hash))
             
-            # 2. Вставляем новые шаги в образовавшееся "окно"
-            current_insert_num = insert_after_step + 1
-            for desc in new_steps:
-                c.execute(
-                    "INSERT INTO plan (description, step_number, status) VALUES (?, ?, 'TODO')", 
-                    (desc, current_insert_num)
-                )
-                current_insert_num += 1
-                
-            conn.commit()
-            logger.info("DB: Insert atomic success")
-        except Exception as e:
-            conn.rollback()
-            logger.error("DB: Insert atomic failed: %s", e)
-            raise e
-        finally:
-            conn.close()
+    def request_approval(self, run_id: str, command_hash: str, command_text: str):
+        with self.get_connection() as conn:
+            conn.execute("INSERT OR IGNORE INTO approvals (run_id, command_hash, command_text, approved) VALUES (?, ?, ?, 0)", (run_id, command_hash, command_text))
 
-# --- Backward Compatibility Wrappers (Proxies to db instance) ---
+    def get_approval_status(self, run_id: str, command_hash: str) -> Optional[int]:
+        with self.get_connection() as conn:
+            row = conn.execute("SELECT approved FROM approvals WHERE run_id = ? AND command_hash = ?", (run_id, command_hash)).fetchone()
+        return row["approved"] if row else None
+        
+    # --- Complex Operations ---
+    def insert_plan_steps_atomic(self, run_id: str, new_steps: List[str], insert_after_step: int):
+        logger.info("DB: Inserting %d steps after step %d for run %s", len(new_steps), insert_after_step, run_id)
+        with self.get_connection() as conn:
+            try:
+                shift_offset = len(new_steps)
+                conn.execute("UPDATE plan SET step_number = step_number + ? WHERE run_id = ? AND step_number > ?", (shift_offset, run_id, insert_after_step))
+                for i, desc in enumerate(new_steps):
+                    conn.execute("INSERT INTO plan (run_id, description, step_number, status) VALUES (?, ?, ?, 'TODO')", (run_id, desc, insert_after_step + 1 + i))
+                conn.commit()
+            except Exception as e:
+                conn.rollback(); logger.error("DB: Atomic insert failed: %s", e); raise
 
-# Wrapper functions have been removed in favor of direct singleton access via `db`:
-# Access DatabaseManager through the singleton instance (e.g., `DatabaseManager.get_instance().init_db()`).
+    def prune_last_tool_message(self, run_id: str) -> bool:
+        with self.get_connection() as conn:
+            try:
+                c = conn.cursor()
+                c.execute("SELECT id, content FROM messages WHERE run_id = ? AND role='tool' ORDER BY id DESC LIMIT 1", (run_id,))
+                row = c.fetchone()
+                if row:
+                    msg_id, content = row["id"], row["content"]
+                    content_str = str(content) if content else ""
+                    if any(marker.lower() in content_str.lower() for marker in CRITICAL_ERROR_MARKERS):
+                        logger.info(f"DB: Skipped pruning msg {msg_id} in run {run_id} due to error markers.")
+                        return False
+                    pruned_text = "[RAW DATA PRUNED. See summary in next message.]"
+                    c.execute("UPDATE messages SET content = ? WHERE id = ?", (pruned_text, msg_id))
+                    conn.commit()
+                    logger.info("DB: Pruned content of tool message ID %s for run %s", msg_id, run_id)
+                    return True
+                else:
+                    logger.warning("DB: Prune requested for run %s, but no tool message found.", run_id)
+                    return False
+            except Exception as e: logger.error("DB: Failed to prune tool message for run %s: %s", run_id, e); return False
+
+# Global instance for convenience
+db_service = DatabaseService()

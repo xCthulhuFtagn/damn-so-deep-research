@@ -3,7 +3,10 @@ from config import MODEL, OPENAI_API_KEY, OPENAI_BASE_URL
 from logging_setup import setup_logging
 from agents import Agent, handoff, ModelSettings
 from agents.extensions.handoff_prompt import RECOMMENDED_PROMPT_PREFIX
-import tools
+from tools.reporting import get_research_summary, submit_step_result, mark_step_failed, get_recovery_context
+from tools.planning import get_current_plan_step, add_steps_to_plan, insert_corrective_steps
+from tools.search import intelligent_web_search
+from tools.execution import read_file, execute_terminal_command, answer_from_knowledge
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -29,7 +32,7 @@ WORKFLOW:
 
 FORBIDDEN: Do not add suffixes like <|channel|> to tool names.
 """,
-    tools=[tools.get_research_summary],
+    tools=[get_research_summary],
     handoffs=[], # No handoffs, Runner handles completion
     model_settings=ModelSettings(
         parallel_tool_calls=False,
@@ -48,7 +51,7 @@ You are the Executor. Your goal is to perform research steps.
 CRITICAL RULES:
 1. Use EXACT tool names.
 2. Call EXACTLY ONE tool per turn.
-3. Available tools: get_current_plan_step, intelligent_web_search, summary, read_file, execute_terminal_command, answer_from_knowledge
+3. Available tools: get_current_plan_step, intelligent_web_search, read_file, execute_terminal_command, answer_from_knowledge
 4. RESTRICTION: Do NOT use `read_file` unless the task explicitly asks to read a specific local file.
 5. RESTRICTION: Limit `intelligent_web_search` calls to a maximum of 3 per research step, includinng curl in terminal commands.
 
@@ -64,11 +67,11 @@ WORKFLOW:
 FORBIDDEN: Never output text unless finishing.
 """,
     tools=[
-        tools.get_current_plan_step,
-        tools.intelligent_web_search,
-        tools.read_file,
-        tools.execute_terminal_command,
-        tools.answer_from_knowledge,
+        get_current_plan_step,
+        intelligent_web_search,
+        read_file,
+        execute_terminal_command,
+        answer_from_knowledge,
     ],
     handoffs=[handoff(reporter_agent)], # Will be updated with Evaluator below
     model_settings=ModelSettings(
@@ -100,9 +103,9 @@ WORKFLOW:
 Available tools: add_steps_to_plan, get_recovery_context
 """,
     tools=[
-        tools.insert_corrective_steps,
-        tools.add_steps_to_plan,
-        tools.get_recovery_context
+        insert_corrective_steps,
+        add_steps_to_plan,
+        get_recovery_context
     ],
     handoffs=[handoff(executor_agent)],
     model_settings=ModelSettings(
@@ -136,9 +139,9 @@ WORKFLOW:
 FORBIDDEN: Do not output text UNLESS the step is valid and you are finishing.
 """,
     tools=[
-        tools.get_current_plan_step, # Useful to confirm ID
-        tools.submit_step_result,
-        tools.mark_step_failed,
+        get_current_plan_step, # Useful to confirm ID
+        submit_step_result,
+        mark_step_failed,
     ],
     handoffs=[handoff(executor_agent), handoff(strategist_agent)],
     model_settings=ModelSettings(
@@ -169,7 +172,7 @@ WORKFLOW:
 
 FORBIDDEN: Do not hand off. Do not add commentary.
 """,
-    tools=[tools.add_steps_to_plan],
+    tools=[add_steps_to_plan],
     handoffs=[], # No handoffs, returns to Runner
     model_settings=ModelSettings(
         parallel_tool_calls=False,

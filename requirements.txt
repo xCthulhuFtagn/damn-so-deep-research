@@ -9,3 +9,4 @@ trafilatura
 sentence-transformers
 torch
 langchain-text-splitters
+bcrypt

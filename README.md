@@ -73,20 +73,38 @@ LOG_LEVEL=DEBUG streamlit run main.py
 LOG_FILE=logs/app.log streamlit run main.py
 ```
 
+## Multi-User Architecture
+
+The application has been refactored to support multiple users and isolated research runs.
+
+- **User Authentication**: A login and registration system has been implemented. Users have their own accounts and can only see their own research runs.
+- **Run Isolation**: Each research run is now tied to a user and has its own isolated state, including the plan, messages, and approvals. This is managed through a `run_id` in the database.
+- **Database Schema**: The database schema has been updated to support multiple users and runs. New tables `users` and `runs` have been added, and existing tables have been modified to include `run_id`.
+
 ## Структура проекта (кратко)
 
-- `main.py`: The main Streamlit application interface, responsible for user interaction and orchestrating the agent swarm.
+- `main.py`: The main Streamlit application interface, responsible for user authentication, run management, and orchestrating the agent swarm.
 - `research_agents.py`: Defines the various AI agents (`Planner`, `Executor`, `Evaluator`, `Strategist`, `Reporter`) and their specific instructions, tools, and handoff mechanisms.
-- `tools.py`: Provides a collection of tools that agents can use, such as web search, file reading, terminal command execution (with user approval), and context management.
-- `database.py`: Manages the SQLite database interactions, including schema definition for `plan`, `approvals`, `messages`, and `global_state` tables, and methods for data manipulation.
-- `db_session.py`: Acts as an adapter between the `agents` SDK's session memory and the `DatabaseManager` for persisting conversation history and research state.
-- `config.py`: Handles loading environment variables from `.env` and provides application-wide configuration settings like API keys, model names, database path, and execution limits.
-- `runner.py`: Contains the core logic for running the agent swarm, managing agent handoffs, and integrating with the Streamlit UI.
+- `tools/`: Directory containing the tools that agents can use.
+  - `search.py`: Web search tool.
+  - `planning.py`: Tools for creating and modifying the research plan.
+  - `execution.py`: Tools for executing commands and reading files.
+  - `reporting.py`: Tools for reporting results.
+  - `legacy.py`: Legacy tools.
+- `utils/`: Directory for utility modules.
+  - `web_scraper.py`: Web scraping logic.
+  - `text_processing.py`: Text processing logic.
+  - `context.py`: Defines context variables for sharing state within a thread.
+- `database.py`: Manages the SQLite database interactions. It has been refactored to a `DatabaseService` class that supports multi-tenancy.
+- `db_session.py`: Acts as an adapter between the `agents` SDK's session memory and the `DatabaseService` for persisting conversation history and research state.
+- `schema.py`: Defines Pydantic models for data validation, like `ChatMessage`.
+- `config.py`: Handles loading environment variables from `.env` and provides application-wide configuration settings.
+- `runner.py`: Contains the core logic for running the agent swarm in background threads, managing agent handoffs, and setting the context for each run.
 - `logging_setup.py`: Configures the application's logging system.
 - `requirements.txt`: Lists all Python dependencies required for the project.
 - `docker-compose.yml`: Docker Compose configuration for setting up a local vLLM server.
 - `Dockerfile`: Defines the Docker image for the main application.
-- `searxng/`: Contains configuration files for the SearXNG metasearch engine, which can be used for web searches.
+- `searxng/`: Contains configuration files for the SearXNG metasearch engine.
 
 ### Логика работы и Контекст Агентов
 
