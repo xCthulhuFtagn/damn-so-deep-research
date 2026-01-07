@@ -1,26 +1,36 @@
 use_default_settings: true
 
+search:
+  formats:
+    - html
+    - json
+  default_lang: "all"
+  safe_search: 0
+
 server:
   secret_key: "debug_key_for_now" 
   limiter: false
   image_proxy: true
 
-search:
-  safe_search: 0
-  autocomplete: "google"
-  default_lang: "ru"
-  # Добавьте эти строки:
-  formats:
-    - html
-    - json
+outgoing:
+  request_timeout: 20.0
+  connect_timeout: 20.0
 
 engines:
-  - name: ahmia
-    engine: ahmia
-    disabled: true
-  - name: torch
-    engine: torch
-    disabled: true
-  - name: wikidata
-    engine: wikidata
+  - name: wikipedia
+    engine: wikipedia
+    disabled: false
+  - name: qwant
+    engine: qwant
+    disabled: false
+  - name: mojeek
+    engine: mojeek
+    disabled: false
+  - name: google
+    engine: google
+    use_mobile_ui: true
+  - name: duckduckgo
+    engine: duckduckgo
+  - name: brave
+    engine: brave
     disabled: true

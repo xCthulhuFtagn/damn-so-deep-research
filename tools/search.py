@@ -29,9 +29,10 @@ def intelligent_web_search(query: str) -> str:
         params = {
             'q': query, 
             'format': 'json', 
-            'language': 'ru'
+            'language': 'all', # Явно просим ВСЕ языки
+            'safesearch': 0,
         }
-        resp = requests.get(searx_url, params=params, timeout=10)
+        resp = requests.get(searx_url, params=params, timeout=30)
         resp.raise_for_status()
         data = resp.json()
         
@@ -39,7 +40,10 @@ def intelligent_web_search(query: str) -> str:
         raw_results = data.get('results', [])[:MAX_SEARCH_RESULTS] 
 
         if not raw_results:
+            logger.info("Search query '%s' returned 0 results from SearXNG", query)
             return "По вашему запросу ничего не найдено."
+
+        logger.info("SearXNG returned %d raw results for query '%s'", len(raw_results), query)
 
     except Exception as e:
         logger.exception("intelligent_web_search error: %s", e)
@@ -61,7 +65,10 @@ def intelligent_web_search(query: str) -> str:
                 all_chunks.extend(result)
 
     if not all_chunks:
+        logger.warning("Failed to extract any content from %d URLs for query '%s'", len(raw_results), query)
         return "Не удалось извлечь контент из найденных страниц (возможно, защита от ботов или пустые страницы)."
+
+    logger.info("Extracted %d chunks from web pages for query '%s'", len(all_chunks), query)
 
     # Лимит на обработку, чтобы CPU не умер на огромных статьях
     # all_chunks = all_chunks[:300]
@@ -90,7 +97,10 @@ def intelligent_web_search(query: str) -> str:
         candidates.append(all_chunks[idx])
 
     if not candidates:
+        logger.info("Bi-Encoder filtered out all %d chunks for query '%s'", len(all_chunks), query)
         return "Найдены тексты, но они не соответствуют контексту запроса (Bi-Encoder filter)."
+
+    logger.info("Bi-Encoder selected %d candidate chunks for query '%s'", len(candidates), query)
 
     # --- Шаг 4: Cross-Encoder (Точный реранкинг) ---
     # Формируем пары [Query, Text]
@@ -114,6 +124,7 @@ def intelligent_web_search(query: str) -> str:
     # Берем ТОП-3 самых лучших
     final_top = scored_candidates[:MAX_FINAL_TOP_CHUNKS]
     if not final_top:
+        logger.info("Cross-Encoder filter: no top chunks for query '%s'", query)
         return "Информация найдена, но отброшена фильтром Cross-Encoder как недостаточно точная."
 
     # Группируем сниппеты по URL и сохраняем их вместе с исходными данными
@@ -156,6 +167,8 @@ def intelligent_web_search(query: str) -> str:
             report_lines.append(clean_text)
         
     if not report_lines:
+        logger.info("Cross-Encoder filtered out all %d candidates for query '%s' due to low scores", len(candidates), query)
         return "Информация найдена, но отброшена фильтром Cross-Encoder как недостаточно точная."
 
+    logger.info("Search successful for query '%s': found %d snippets from %d sources", query, len(final_top), len(sorted_urls))
     return "\n".join(report_lines)

@@ -153,10 +153,16 @@ else:
                             # Handle result display for web search
                             result = tool_call.get('result', '')
                             if tool_name == "intelligent_web_search" and result:
-                                # Catch all failure modes: empty, error, extraction fail, or filtered
-                                failure_markers = ["no results", "ничего не найдено", "ошибка", "не удалось", "не соответствуют", "отброшена фильтром"]
-                                if any(marker in str(result).lower() for marker in failure_markers):
-                                    tool_calls_md += f"> {result}\n"
+                                result_str = str(result)
+                                failure_markers = ["ничего не найдено", "ошибка", "не удалось", "не соответствуют", "отброшена фильтром"]
+                                
+                                if any(marker in result_str.lower() for marker in failure_markers):
+                                    tool_calls_md += f"> ❌ {result_str}\n"
+                                else:
+                                    # Simple heuristic to count sources and snippets from the report
+                                    sources_count = result_str.count("=== Источник:")
+                                    snippets_count = result_str.count("\n") - (sources_count * 2) # rough estimate
+                                    tool_calls_md += f"> ✅ Найдено источников: {sources_count}\n"
                     
                     st.markdown(tool_calls_md)
                 else:
