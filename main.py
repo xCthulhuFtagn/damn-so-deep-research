@@ -126,7 +126,11 @@ else:
         for msg in display_messages:
             with st.chat_message(msg.role):
                 if msg.role == "user":
-                    st.markdown(f"**User Query:** {msg.content}")
+                    system_prefixes = ("Execute Step", "An error occurred", "An internal error occurred", "Plan created", "All steps completed")
+                    if msg.content and any(msg.content.startswith(p) for p in system_prefixes):
+                        st.markdown(msg.content)
+                    else:
+                        st.markdown(f"**User Query:** {msg.content}")
                 elif msg.tool_calls:
                     # Initialize a string to hold all tool call markdowns
                     tool_calls_md = ""
@@ -135,7 +139,7 @@ else:
                             tool_name = tool_call['function']['name']
                             
                             # Handle arguments display
-                            if tool_name == "answer_from_knowledge":
+                            if tool_name in ["answer_from_knowledge", "submit_step_result", "add_steps_to_plan"]:
                                 args_str = "..."
                             else:
                                 try:
@@ -149,8 +153,9 @@ else:
                             # Handle result display for web search
                             result = tool_call.get('result', '')
                             if tool_name == "intelligent_web_search" and result:
-                                # Check if result indicates failure/no results
-                                if "no results" in str(result).lower() or "ничего не найдено" in str(result).lower():
+                                # Catch all failure modes: empty, error, extraction fail, or filtered
+                                failure_markers = ["no results", "ничего не найдено", "ошибка", "не удалось", "не соответствуют", "отброшена фильтром"]
+                                if any(marker in str(result).lower() for marker in failure_markers):
                                     tool_calls_md += f"> {result}\n"
                     
                     st.markdown(tool_calls_md)
