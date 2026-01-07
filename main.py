@@ -125,10 +125,9 @@ else:
         display_messages = get_display_messages(run_id)
         for msg in display_messages:
             with st.chat_message(msg.role):
-                st.markdown(f"**{msg.sender or ''}**")
-                if msg.content:
-                    st.markdown(msg.content)
-                if msg.tool_calls:
+                if msg.role == "user":
+                    st.markdown(f"**User Query:** {msg.content}")
+                elif msg.tool_calls:
                     # Initialize a string to hold all tool call markdowns
                     tool_calls_md = ""
                     for tool_call in msg.tool_calls:
@@ -155,6 +154,12 @@ else:
                                     tool_calls_md += f"> {result}\n"
                     
                     st.markdown(tool_calls_md)
+                else:
+                    # Final Report or regular messages
+                    if msg.sender:
+                        st.markdown(f"**{msg.sender}:**")
+                    if msg.content:
+                        st.markdown(msg.content)
         
         # --- Swarm Execution Logic ---
         if db_service.is_swarm_running(run_id):
