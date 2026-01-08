@@ -65,6 +65,11 @@ class SwarmRunner:
                 logger.info("=== PHASE 1: PLANNING for run %s ===", run_id)
                 session = DBSession(f"planner_{run_id}")
                 _execute_phase(run_id, current_agent, current_input, session, max_turns, run_config)
+                
+                if db_service.should_stop(run_id):
+                    logger.info("Stop signal received after Phase 1 for run %s", run_id)
+                    return
+
                 current_agent = executor_agent
                 current_input = "Plan created. Begin execution."
 
@@ -87,6 +92,10 @@ class SwarmRunner:
                         logger.error(f"Step {next_step['step_number']} for run {run_id} failed: {e}")
                         db_service.update_step_status(next_step['id'], "FAILED", f"System Error: {e}")
                 
+                if db_service.should_stop(run_id):
+                    logger.info("Stop signal received during/after Phase 2 for run %s", run_id)
+                    return
+
                 current_agent = reporter_agent
                 current_input = "All steps completed. Generate the final report."
 

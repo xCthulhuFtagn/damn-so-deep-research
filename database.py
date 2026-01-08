@@ -13,10 +13,12 @@ from schema import ChatMessage
 setup_logging()
 logger = logging.getLogger(__name__)
 
-# Marker strings for critical errors
+# Marker strings for critical errors or informative failures that should not be pruned
 CRITICAL_ERROR_MARKERS = [
     "Error:", "Exception:", "Traceback", "Timeout", "ConnectionRefused",
-    "Ошибка поискового движка", "failed to", "status code:"
+    "Ошибка поискового движка", "failed to", "status code:",
+    "ничего не найдено", "не удалось", "не соответствуют", "отброшена фильтром",
+    "недоступны", "заблокированы"
 ]
 
 class DatabaseService:

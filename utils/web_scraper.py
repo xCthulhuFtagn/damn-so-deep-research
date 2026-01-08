@@ -1,12 +1,17 @@
 import requests
 import trafilatura
 import logging
+import threading
 from urllib.parse import urlparse
 from typing import List, Dict, Any
 
 from config import MIN_CHUNK_LEN_TO_MERGE
 
 logger = logging.getLogger(__name__)
+
+# Trafilatura (lxml) can sometimes have issues with concurrency in certain environments.
+# A global lock for extraction can prevent double-free or memory corruption issues.
+extraction_lock = threading.Lock()
 
 def fetch_and_process_url(url: str, title: str, text_splitter) -> List[Dict[str, Any]]:
     """
@@ -39,12 +44,18 @@ def fetch_and_process_url(url: str, title: str, text_splitter) -> List[Dict[str,
             return []
 
         # 2. Экстракция чистого текста
-        clean_text = trafilatura.extract(
-            downloaded, 
-            include_comments=False, 
-            include_tables=False, 
-            include_formatting=False
-        )
+        with extraction_lock:
+            try:
+                clean_text = trafilatura.extract(
+                    downloaded, 
+                    include_comments=False, 
+                    include_tables=False, 
+                    include_formatting=False
+                )
+            except Exception as e:
+                logger.error(f"Trafilatura extraction failed for {url}: {e}")
+                return []
+                
         if not clean_text:
             return []
 

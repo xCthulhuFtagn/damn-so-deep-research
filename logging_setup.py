@@ -75,5 +75,10 @@ def setup_logging() -> None:
     # especially when LOG_FILE is inside the project and is being modified constantly.
     logging.getLogger("watchdog").setLevel(logging.WARNING)
     logging.getLogger("streamlit").setLevel(logging.WARNING)
+    
+    # Silence trafilatura spam
+    logging.getLogger("trafilatura").setLevel(logging.WARNING)
+    logging.getLogger("htmldate").setLevel(logging.WARNING)
+    logging.getLogger("charset_normalizer").setLevel(logging.WARNING)
 
 

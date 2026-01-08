@@ -28,9 +28,15 @@ def get_display_messages(run_id):
             for i, tool_call in enumerate(msg.tool_calls):
                 tool_call_id = tool_call.get('id')
                 result = tool_results.get(tool_call_id)
+                
+                # Fallback for vLLM/Local models where tool_call.id might be '__fake_id__' 
+                # but the real ID is stored in the message's tool_call_id column
+                if result is None and msg.tool_call_id:
+                    result = tool_results.get(msg.tool_call_id)
+
                 # Just attach the raw result, let the UI decide how to show it
                 msg.tool_calls[i]['result'] = result
-        
+
         display_messages.append(msg)
     
     return display_messages
@@ -74,28 +80,39 @@ else:
     st.sidebar.title(f"Welcome, {st.session_state.username}")
     st.sidebar.markdown("---")
 
-    # --- Run Management in Sidebar ---
-    st.sidebar.subheader("Research Runs")
-    user_runs = db_service.get_user_runs(st.session_state.user_id)
-    
-    if st.sidebar.button("➕ New Research Run"):
-        # Simple title for now, could be a form
-        new_run_title = f"New Run {len(user_runs) + 1}"
-        new_run_id = db_service.create_run(st.session_state.user_id, new_run_title)
-        st.session_state.active_run_id = new_run_id
-        st.rerun()
-
-    if not user_runs:
-        st.sidebar.info("No research runs yet. Create one to begin.")
-    else:
-        for run in user_runs:
-            if st.sidebar.button(f"📄 {run['title']}", key=run['id']):
-                st.session_state.active_run_id = run['id']
     # --- Active Run View ---
     if 'active_run_id' in st.session_state:
         run_id = st.session_state.active_run_id
         run_title = db_service.get_run_title(run_id) or "Research"
-        st.title(f"🧠 {run_title}")
+
+        # --- Stop/Resume Control ---
+        is_running = db_service.is_swarm_running(run_id)
+        # Zombie detection: If DB says running but no thread exists locally
+        if is_running and run_id not in runner.active_runs:
+            logger.info(f"Zombie run detected for {run_id}. Resetting status.")
+            db_service.set_swarm_running(run_id, False)
+            is_running = False
+            st.rerun()
+
+        if is_running:
+            if st.sidebar.button("🛑 Stop Research", key=f"stop_sidebar_{run_id}", use_container_width=True):
+                db_service.set_stop_signal(run_id, True)
+                st.sidebar.info("Stop signal sent.")
+        else:
+            plan_df = db_service.get_all_plan(run_id)
+            if not plan_df.empty:
+                incomplete_steps = plan_df[plan_df['status'].isin(['TODO', 'IN_PROGRESS', 'FAILED'])]
+                if not incomplete_steps.empty:
+                    if st.sidebar.button("▶️ Resume Research", key=f"resume_sidebar_{run_id}", use_container_width=True):
+                        db_service.set_stop_signal(run_id, False)
+                        runner.run_in_background(
+                            run_id=run_id,
+                            user_id=st.session_state.user_id,
+                            start_agent=executor_agent,
+                            input_text="Resume research from where it left off.",
+                            max_turns=MAX_TURNS
+                        )
+                        st.rerun()
 
         # --- Plan and Approvals in Sidebar ---
         st.sidebar.subheader("📋 Research Plan")
@@ -120,6 +137,32 @@ else:
                     st.rerun()
         else:
             st.sidebar.success("No pending actions for this run.")
+
+    st.sidebar.markdown("---")
+
+    # --- Run Management in Sidebar ---
+    st.sidebar.subheader("Research Runs")
+    user_runs = db_service.get_user_runs(st.session_state.user_id)
+    
+    if st.sidebar.button("➕ New Research Run"):
+        # Simple title for now, could be a form
+        new_run_title = f"New Run {len(user_runs) + 1}"
+        new_run_id = db_service.create_run(st.session_state.user_id, new_run_title)
+        st.session_state.active_run_id = new_run_id
+        st.rerun()
+
+    if not user_runs:
+        st.sidebar.info("No research runs yet. Create one to begin.")
+    else:
+        for run in user_runs:
+            if st.sidebar.button(f"📄 {run['title']}", key=run['id']):
+                st.session_state.active_run_id = run['id']
+
+    # --- Active Run View (Title and Content) ---
+    if 'active_run_id' in st.session_state:
+        run_id = st.session_state.active_run_id
+        run_title = db_service.get_run_title(run_id) or "Research"
+        st.title(f"🧠 {run_title}")
 
         # --- Main Chat Area ---
         display_messages = get_display_messages(run_id)
@@ -151,18 +194,32 @@ else:
                             tool_calls_md += f"`{tool_name}({args_str})`\n"
                             
                             # Handle result display for web search
-                            result = tool_call.get('result', '')
-                            if tool_name == "intelligent_web_search" and result:
-                                result_str = str(result)
-                                failure_markers = ["ничего не найдено", "ошибка", "не удалось", "не соответствуют", "отброшена фильтром"]
+                            result = tool_call.get('result')
+                            if tool_name == "intelligent_web_search":
+                                result_str = str(result or "")
+                                failure_markers = [
+                                    "ничего не найдено", "ошибка", "не удалось", 
+                                    "не соответствуют", "отброшена фильтром",
+                                    "недоступны", "заблокированы", "failed to"
+                                ]
                                 
-                                if any(marker in result_str.lower() for marker in failure_markers):
+                                if result is None:
+                                    if is_running:
+                                        tool_calls_md += f"> ⏳ Выполняется поиск...\n"
+                                    else:
+                                        tool_calls_md += f"> ❓ Результат поиска отсутствует (внутренняя ошибка или таймаут)\n"
+                                elif "[RAW DATA PRUNED]" in result_str:
+                                    tool_calls_md += f"> 🛡️ Исходные данные поиска очищены для экономии контекста\n"
+                                elif any(marker in result_str.lower() for marker in failure_markers):
                                     tool_calls_md += f"> ❌ {result_str}\n"
                                 else:
-                                    # Simple heuristic to count sources and snippets from the report
                                     sources_count = result_str.count("=== Источник:")
-                                    snippets_count = result_str.count("\n") - (sources_count * 2) # rough estimate
-                                    tool_calls_md += f"> ✅ Найдено источников: {sources_count}\n"
+                                    if sources_count > 0:
+                                        tool_calls_md += f"> ✅ Найдено источников: {sources_count}\n"
+                                    elif result_str:
+                                        tool_calls_md += f"> ⚠️ {result_str}\n"
+                                    else:
+                                        tool_calls_md += f"> ❌ Поиск не дал результатов\n"
                     
                     st.markdown(tool_calls_md)
                 else:
@@ -173,7 +230,9 @@ else:
                         st.markdown(msg.content)
         
         # --- Swarm Execution Logic ---
-        if db_service.is_swarm_running(run_id):
+        is_running = db_service.is_swarm_running(run_id)
+        
+        if is_running:
             with st.status("🚀 Swarm is active...", expanded=True):
                 while db_service.is_swarm_running(run_id):
                     time.sleep(2)
@@ -182,7 +241,7 @@ else:
             time.sleep(1)
             st.rerun()
 
-        if prompt := st.chat_input("Input research topic...", disabled=db_service.is_swarm_running(run_id)):
+        if prompt := st.chat_input("Input research topic...", disabled=is_running):
             plan_df = db_service.get_all_plan(run_id)
             start_agent = planner_agent if plan_df.empty else executor_agent
             

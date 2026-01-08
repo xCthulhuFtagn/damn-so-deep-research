@@ -20,17 +20,22 @@ engines:
   - name: wikipedia
     engine: wikipedia
     disabled: false
-  - name: qwant
-    engine: qwant
-    disabled: false
-  - name: mojeek
-    engine: mojeek
-    disabled: false
   - name: google
     engine: google
+    disabled: false
     use_mobile_ui: true
-  - name: duckduckgo
-    engine: duckduckgo
   - name: brave
     engine: brave
+    disabled: false
+  - name: duckduckgo
+    engine: duckduckgo
+    disabled: true
+  - name: qwant
+    engine: qwant
+    disabled: true
+  - name: mojeek
+    engine: mojeek
+    disabled: true
+  - name: startpage
+    engine: startpage
     disabled: true

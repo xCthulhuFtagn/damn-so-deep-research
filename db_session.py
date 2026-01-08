@@ -128,13 +128,20 @@ class DBSession(Session):
                 if item.get("id") and item.get("name"):
                     tool_calls = [{"id": item["id"], "type": "function", "function": {"name": item["name"], "arguments": _as_json_str(item.get("arguments"))}}]
             
-            tool_call_id = item.get("tool_call_id") or item.get("call_id") if is_dict else getattr(item, "tool_call_id", getattr(item, "call_id", None))
+            tool_call_id = item.get("tool_call_id") or item.get("call_id") or item.get("id") if is_dict else getattr(item, "tool_call_id", getattr(item, "call_id", getattr(item, "id", None)))
             sender = item.get("sender") or item.get("name") if is_dict else getattr(item, "sender", getattr(item, "name", None))
+
+            # Ensure tool_call_id is a string and not empty if it exists
+            final_call_id = None
+            if tool_call_id:
+                final_call_id = str(tool_call_id).strip()
+                if not final_call_id:
+                    final_call_id = None
 
             db_service.save_message(
                 run_id=run_id, role=str(role), content=content,
                 tool_calls=tool_calls if isinstance(tool_calls, list) else None,
-                tool_call_id=str(tool_call_id) if tool_call_id else None,
+                tool_call_id=final_call_id,
                 sender=str(sender) if sender else None, session_id=self.session_id
             )
 

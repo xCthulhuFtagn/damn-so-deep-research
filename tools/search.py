@@ -36,11 +36,18 @@ def intelligent_web_search(query: str) -> str:
         resp.raise_for_status()
         data = resp.json()
         
+        unresponsive = data.get('unresponsive_engines', [])
+        if unresponsive:
+            logger.warning("SearXNG unresponsive engines for query '%s': %s", query, unresponsive)
+
         # Берем чуть больше ссылок, так как у нас теперь мощный фильтр
         raw_results = data.get('results', [])[:MAX_SEARCH_RESULTS] 
 
         if not raw_results:
             logger.info("Search query '%s' returned 0 results from SearXNG", query)
+            if unresponsive:
+                error_msg = f"Поисковые системы временно недоступны или заблокированы: {', '.join([e[0] for e in unresponsive])}."
+                return error_msg
             return "По вашему запросу ничего не найдено."
 
         logger.info("SearXNG returned %d raw results for query '%s'", len(raw_results), query)
@@ -60,9 +67,12 @@ def intelligent_web_search(query: str) -> str:
         }
         
         for future in concurrent.futures.as_completed(future_to_url):
-            result = future.result()
-            if result:
-                all_chunks.extend(result)
+            try:
+                result = future.result()
+                if result:
+                    all_chunks.extend(result)
+            except Exception as e:
+                logger.error(f"Error getting result from thread: {e}")
 
     if not all_chunks:
         logger.warning("Failed to extract any content from %d URLs for query '%s'", len(raw_results), query)
