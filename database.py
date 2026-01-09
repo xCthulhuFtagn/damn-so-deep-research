@@ -4,6 +4,7 @@ import json
 import logging
 import uuid
 import bcrypt
+import os
 from typing import List, Optional, Dict
 
 from config import DB_PATH
@@ -34,6 +35,11 @@ class DatabaseService:
         return conn
 
     def init_db(self):
+        # Ensure directory exists
+        db_dir = os.path.dirname(self.db_path)
+        if db_dir and not os.path.exists(db_dir):
+            os.makedirs(db_dir, exist_ok=True)
+
         logger.info("DB init: path=%s", self.db_path)
         with self.get_connection() as conn:
             c = conn.cursor()
@@ -47,6 +53,7 @@ class DatabaseService:
                 CREATE TABLE IF NOT EXISTS runs (
                     id TEXT PRIMARY KEY, user_id TEXT, title TEXT, status TEXT DEFAULT 'active',
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    total_tokens INTEGER DEFAULT 0,
                     FOREIGN KEY(user_id) REFERENCES users(id)
                 )
             ''')
@@ -89,6 +96,7 @@ class DatabaseService:
             add_column_if_not_exists("messages", "run_id", "TEXT")
             add_column_if_not_exists("plan", "run_id", "TEXT")
             add_column_if_not_exists("approvals", "run_id", "TEXT")
+            add_column_if_not_exists("runs", "total_tokens", "INTEGER DEFAULT 0")
             
             # Recreate approvals table if it has the old primary key
             c.execute("PRAGMA table_info(approvals)")
@@ -162,7 +170,16 @@ class DatabaseService:
 
     def get_user_runs(self, user_id: str) -> List[Dict]:
         with self.get_connection() as conn:
-            return [dict(row) for row in conn.execute("SELECT id, title, status, created_at FROM runs WHERE user_id = ? ORDER BY created_at DESC", (user_id,)).fetchall()]
+            return [dict(row) for row in conn.execute("SELECT id, title, status, created_at, total_tokens FROM runs WHERE user_id = ? ORDER BY created_at DESC", (user_id,)).fetchall()]
+
+    def increment_token_usage(self, run_id: str, tokens: int):
+        with self.get_connection() as conn:
+            conn.execute("UPDATE runs SET total_tokens = total_tokens + ? WHERE id = ?", (tokens, run_id))
+
+    def get_token_usage(self, run_id: str) -> int:
+        with self.get_connection() as conn:
+            row = conn.execute("SELECT total_tokens FROM runs WHERE id = ?", (run_id,)).fetchone()
+        return (row["total_tokens"] or 0) if row else 0
 
     # --- State Operations (Per Run) ---
     def _set_run_state(self, run_id: str, key: str, value: str):

@@ -86,6 +86,10 @@ else:
         run_id = st.session_state.active_run_id
         run_title = db_service.get_run_title(run_id) or "Research"
 
+        # Token Counter
+        token_usage = db_service.get_token_usage(run_id)
+        st.sidebar.markdown(f"**Tokens wasted:** {token_usage}")
+
         # --- Pause/Resume Control ---
         is_running = db_service.is_swarm_running(run_id)
         # Zombie detection: If DB says running but no thread exists locally

@@ -22,6 +22,22 @@ class VLLMChatCompletionsProvider(ModelProvider):
         self._client = AsyncOpenAI(base_url=base_url, api_key=api_key)
         self._default_model = default_model
 
+        # Wrap the create method to track tokens
+        original_create = self._client.chat.completions.create
+        
+        async def tracking_create(*args, **kwargs):
+            response = await original_create(*args, **kwargs)
+            try:
+                if response and response.usage:
+                    run_id = current_run_id.get()
+                    if run_id:
+                        db_service.increment_token_usage(run_id, response.usage.total_tokens)
+            except Exception as e:
+                logger.error(f"Failed to track tokens: {e}")
+            return response
+            
+        self._client.chat.completions.create = tracking_create
+
     def get_model(self, model_name: str | None) -> Model:
         return OpenAIChatCompletionsModel(model=model_name or self._default_model, openai_client=self._client)
 

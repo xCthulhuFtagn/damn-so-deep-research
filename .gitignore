@@ -4,6 +4,7 @@ logs/
 research_state.db
 .venv/
 .cursor/
+db/
 research.db
 research_state.db-wal
 research_state.db-shm

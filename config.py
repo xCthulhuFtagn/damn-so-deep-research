@@ -28,5 +28,5 @@ MIN_CHUNK_LEN_TO_MERGE = int(os.getenv("MIN_CHUNK_LEN_TO_MERGE", 100))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", 150))
 
 # Путь к базе данных
-BASE_DIR = Path(__file__).resolve().parent
+BASE_DIR = Path("db")
 DB_PATH = str(BASE_DIR / DB_NAME)
