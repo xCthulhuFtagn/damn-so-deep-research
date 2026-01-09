@@ -29,12 +29,12 @@ def execute_terminal_command(command: str) -> str:
         logger.info("execute_terminal_command: approval requested for run_id=%s hash=%s", run_id, cmd_hash)
         status = 0  # Pending
 
-    # 2. Loop until approved, denied, or stopped
+    # 2. Loop until approved, denied, or paused
     waited = 0
     while status == 0:
-        if db_service.should_stop(run_id):
-            logger.info("execute_terminal_command: stop signal received for run_id=%s", run_id)
-            return "Execution stopped by user signal."
+        if db_service.should_pause(run_id):
+            logger.info("execute_terminal_command: pause signal received for run_id=%s", run_id)
+            return "Execution paused by user signal."
             
         time.sleep(1)
         waited += 1
@@ -85,3 +85,46 @@ def answer_from_knowledge(answer: str) -> str:
     Эхо-инструмент: принимает сгенерированный текст и возвращает его как есть, чтобы зафиксировать ответ через tool_call.
     """
     return answer
+
+@function_tool
+def ask_user(question: str) -> str:
+    """
+    КРИТИЧЕСКИ ВАЖНО: Этот инструмент должен использоваться ТОЛЬКО в экстренных случаях, когда агент не может продолжить работу без уточнения от пользователя.
+    
+    Задает вопрос пользователю и ожидает ответа. Используйте этот инструмент только если:
+    - Задача неоднозначна и требует уточнения
+    - Недостаточно информации для продолжения работы
+    - Возникла критическая ситуация, требующая вмешательства пользователя
+    
+    НЕ используйте этот инструмент для обычных вопросов или если можно продолжить работу с имеющейся информацией.
+    """
+    run_id = current_run_id.get()
+    if not run_id:
+        return "Error: No active run context."
+
+    logger.info("ask_user: run_id=%s question=%s", run_id, question)
+    
+    # Set the pending question in run_state
+    db_service._set_run_state(run_id, 'pending_question', question)
+    
+    # Wait for user response
+    waited = 0
+    while True:
+        if db_service.should_pause(run_id):
+            logger.info("ask_user: pause signal received for run_id=%s", run_id)
+            db_service._set_run_state(run_id, 'pending_question', '')
+            return "Question cancelled due to pause signal."
+            
+        time.sleep(1)
+        waited += 1
+        if waited % 5 == 0:
+            logger.info("Waiting for user answer... run_id=%s time=%ds", run_id, waited)
+            
+        # Check for response
+        response = db_service._get_run_state(run_id, 'pending_question_response')
+        if response:
+            # Clear both question and response
+            db_service._set_run_state(run_id, 'pending_question', '')
+            db_service._set_run_state(run_id, 'pending_question_response', '')
+            logger.info("ask_user: received answer for run_id=%s", run_id)
+            return response

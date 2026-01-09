@@ -66,18 +66,18 @@ class SwarmRunner:
                 session = DBSession(f"planner_{run_id}")
                 _execute_phase(run_id, current_agent, current_input, session, max_turns, run_config)
                 
-                if db_service.should_stop(run_id):
-                    logger.info("Stop signal received after Phase 1 for run %s", run_id)
+                if db_service.should_pause(run_id):
+                    logger.info("Pause signal received after Phase 1 for run %s", run_id)
                     return
 
                 current_agent = executor_agent
-                current_input = "Plan created. Begin execution."
+                current_input = "[INTERNAL SYSTEM NOTIFICATION]: Plan created. Begin execution."
 
             if current_agent.name in ["Executor", "Evaluator", "Strategist"]:
                 logger.info("=== PHASE 2: EXECUTION for run %s ===", run_id)
                 session = DBSession(f"research_{run_id}")
                 
-                while not db_service.should_stop(run_id):
+                while not db_service.should_pause(run_id):
                     next_step = db_service.get_next_step(run_id)
                     if not next_step:
                         logger.info("No more steps for run_id=%s. Execution Phase Complete.", run_id)
@@ -92,17 +92,20 @@ class SwarmRunner:
                         logger.error(f"Step {next_step['step_number']} for run {run_id} failed: {e}")
                         db_service.update_step_status(next_step['id'], "FAILED", f"System Error: {e}")
                 
-                if db_service.should_stop(run_id):
-                    logger.info("Stop signal received during/after Phase 2 for run %s", run_id)
+                if db_service.should_pause(run_id):
+                    logger.info("Pause signal received during/after Phase 2 for run %s", run_id)
                     return
 
                 current_agent = reporter_agent
-                current_input = "All steps completed. Generate the final report."
+                current_input = "[INTERNAL SYSTEM NOTIFICATION]: All steps completed. Generate the final report."
 
             if current_agent.name == "Reporter":
                 logger.info("=== PHASE 3: REPORTING for run %s ===", run_id)
                 session = DBSession(f"reporter_{run_id}")
                 _execute_phase(run_id, current_agent, current_input, session, max_turns, run_config)
+                # Mark run as completed after Reporter finishes
+                db_service.update_run_status(run_id, 'completed')
+                logger.info("Run %s marked as completed", run_id)
 
         except Exception as e:
             logger.exception("Error in swarm background thread for run %s: %s", run_id, e)
@@ -120,27 +123,50 @@ def _execute_phase(run_id: str, agent: Agent, input_text: str, session: DBSessio
     current_input = input_text
 
     while retry_count <= MAX_RETRIES:
-        if db_service.should_stop(run_id):
-            logger.warning("Stop signal received for run %s during phase execution.", run_id)
+        if db_service.should_pause(run_id):
+            logger.warning("Pause signal received for run %s during phase execution.", run_id)
             return
 
         try:
             logger.info("Runner: agent=%s, session=%s, run_id=%s", agent.name, session.session_id, run_id)
-            return Runner.run_sync(agent, input=current_input, session=session, max_turns=max_turns, run_config=run_config)
+            Runner.run_sync(agent, input=current_input, session=session, max_turns=max_turns, run_config=run_config)
+            
+            # Strict tool enforcement: Check last assistant message
+            # Only enforce for non-Reporter agents
+            if agent.name not in ["Reporter", "Planner"]:
+                messages = db_service.load_messages(run_id)
+                # Find the last assistant message for this session
+                last_assistant = None
+                for msg in reversed(messages):
+                    if msg.role == "assistant" and msg.session_id == session.session_id:
+                        last_assistant = msg
+                        break
+                
+                if last_assistant:
+                    has_content = last_assistant.content and last_assistant.content.strip()
+                    has_tool_calls = last_assistant.tool_calls and len(last_assistant.tool_calls) > 0
+                    
+                    # Violation: Has content but no tool calls
+                    if has_content and not has_tool_calls:
+                        error_msg = f"Strict mode violation: Agent {agent.name} output text without calling a tool. Text: {last_assistant.content[:200]}"
+                        logger.warning(error_msg)
+                        raise ModelBehaviorError(error_msg)
+            
+            return
         except (ModelBehaviorError, BadRequestError) as e:
             retry_count += 1
             error_msg = str(e)
             short_error = error_msg[:500] + "..." if len(error_msg) > 500 else error_msg
             logger.warning("API/Model Error (attempt %s) for run %s: %s", retry_count, run_id, short_error)
             db_service.save_message(run_id, "system", f"System Feedback: {short_error}", session_id=session.session_id)
-            current_input = "An error occurred. Please review the feedback and continue."
+            current_input = "[INTERNAL SYSTEM NOTIFICATION]: An error occurred. Please review the feedback and continue."
         except Exception as e:
             retry_count += 1
             err_msg = str(e)
             short_err = err_msg[:500] + "..." if len(err_msg) > 500 else err_msg
             logger.exception("Generic error in phase (attempt %s) for run %s: %s", retry_count, run_id, short_err)
             db_service.save_message(run_id, "system", f"System Error: {short_err}", session_id=session.session_id)
-            current_input = "An internal error occurred. Please try to recover."
+            current_input = "[INTERNAL SYSTEM NOTIFICATION]: An internal error occurred. Please try to recover."
             time.sleep(2)
 
     raise RuntimeError(f"Swarm execution failed for run {run_id} after {MAX_RETRIES} retries.")

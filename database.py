@@ -155,6 +155,11 @@ class DatabaseService:
         with self.get_connection() as conn:
             conn.execute("UPDATE runs SET title = ? WHERE id = ?", (new_title, run_id))
 
+    def update_run_status(self, run_id: str, status: str):
+        """Update the status of a run (e.g., 'active', 'completed')."""
+        with self.get_connection() as conn:
+            conn.execute("UPDATE runs SET status = ? WHERE id = ?", (status, run_id))
+
     def get_user_runs(self, user_id: str) -> List[Dict]:
         with self.get_connection() as conn:
             return [dict(row) for row in conn.execute("SELECT id, title, status, created_at FROM runs WHERE user_id = ? ORDER BY created_at DESC", (user_id,)).fetchall()]
@@ -171,16 +176,16 @@ class DatabaseService:
 
     def set_swarm_running(self, run_id: str, running: bool):
         self._set_run_state(run_id, 'swarm_running', '1' if running else '0')
-        if not running: self.set_stop_signal(run_id, False)
+        if not running: self.set_pause_signal(run_id, False)
 
     def is_swarm_running(self, run_id: str) -> bool:
         return self._get_run_state(run_id, 'swarm_running') == '1'
 
-    def set_stop_signal(self, run_id: str, requested: bool):
-        self._set_run_state(run_id, 'stop_requested', '1' if requested else '0')
+    def set_pause_signal(self, run_id: str, requested: bool):
+        self._set_run_state(run_id, 'pause_requested', '1' if requested else '0')
 
-    def should_stop(self, run_id: str) -> bool:
-        return self._get_run_state(run_id, 'stop_requested') == '1'
+    def should_pause(self, run_id: str) -> bool:
+        return self._get_run_state(run_id, 'pause_requested') == '1'
         
     def set_active_task(self, run_id: str, task_number: Optional[int]):
         self._set_run_state(run_id, 'active_task', str(task_number) if task_number is not None else '')

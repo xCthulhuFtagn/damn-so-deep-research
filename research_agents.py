@@ -6,7 +6,7 @@ from agents.extensions.handoff_prompt import RECOMMENDED_PROMPT_PREFIX
 from tools.reporting import get_research_summary, submit_step_result, mark_step_failed, get_recovery_context
 from tools.planning import get_current_plan_step, add_steps_to_plan, insert_corrective_steps
 from tools.search import intelligent_web_search
-from tools.execution import read_file, execute_terminal_command, answer_from_knowledge
+from tools.execution import read_file, execute_terminal_command, answer_from_knowledge, ask_user, ask_user
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -28,7 +28,8 @@ CRITICAL RULES:
 WORKFLOW:
 1. First turn: Call `get_research_summary` (exact name, no arguments).
 2. Second turn: Write a comprehensive Markdown report based on the findings provided by the tool.
-3. Output the report text directly.
+3. The report MUST end with author attribution to "damn-so-deep-research" as the last line.
+4. Output the report text directly.
 
 FORBIDDEN: Do not add suffixes like <|channel|> to tool names.
 """,
@@ -51,20 +52,21 @@ You are the Executor. Your goal is to perform research steps.
 CRITICAL RULES:
 1. Use EXACT tool names.
 2. Call EXACTLY ONE tool per turn.
-3. Available tools: get_current_plan_step, intelligent_web_search, read_file, execute_terminal_command, answer_from_knowledge
+3. Available tools: get_current_plan_step, intelligent_web_search, read_file, execute_terminal_command, answer_from_knowledge, ask_user
 4. RESTRICTION: Do NOT use `read_file` unless the task explicitly asks to read a specific local file.
 5. RESTRICTION: Limit `intelligent_web_search` calls to a maximum of 3 per research step, includinng curl in terminal commands.
+6. EMERGENCY ONLY: Use `ask_user` ONLY in critical situations when you cannot proceed without user clarification. This is an emergency tool.
 
 WORKFLOW:
 1. ALWAYS start by calling `get_current_plan_step`.
-2. If it returns "NO_MORE_STEPS": Output "Research Complete".
+2. If it returns "NO_MORE_STEPS": Call `answer_from_knowledge("Research Complete")`.
 3. Otherwise, use research tools:
    - Call `intelligent_web_search` with your query if the task is very specific and you need to search the web to find the information for it.
    - Call `execute_terminal_command` if the task requires you to execute a terminal command.
    - Call `answer_from_knowledge` if the question is quite simple and you can answer it yourself or if the previously called research tools in this step have provided information from which a SHORT USEFUL INSIGHT can be drawn.
 4. When you have enough information for the CURRENT step, hand off to Evaluator.
 
-FORBIDDEN: Never output text unless finishing.
+FORBIDDEN: You must NEVER output raw text. ALWAYS use a tool. If you need to signal completion, use `answer_from_knowledge`.
 """,
     tools=[
         get_current_plan_step,
@@ -72,6 +74,7 @@ FORBIDDEN: Never output text unless finishing.
         read_file,
         execute_terminal_command,
         answer_from_knowledge,
+        ask_user,
     ],
     handoffs=[handoff(reporter_agent)], # Will be updated with Evaluator below
     model_settings=ModelSettings(
@@ -93,6 +96,7 @@ CRITICAL RULES:
 2. Use `insert_corrective_steps` to inject new tasks immediately after the failed step. This shifts old future steps down.
 3. Only use `add_steps_to_plan` if you specifically want to append to the very END of the list.
 4. FORBIDDEN: Do NOT add reporting/summarization steps.
+5. EMERGENCY ONLY: Use `ask_user` ONLY in critical situations when you cannot proceed without user clarification. This is an emergency tool.
 
 WORKFLOW:
 1. Analyze the context (the system will provide the failure details).
@@ -100,12 +104,15 @@ WORKFLOW:
 3. Call `add_steps_to_plan` to add steps to end of the plan if current plan showed itself insufficient to complete the task.
 4. In the next turn, hand off to Executor to try again.
 
-Available tools: add_steps_to_plan, get_recovery_context
+Available tools: add_steps_to_plan, get_recovery_context, ask_user
+
+FORBIDDEN: You must NEVER output raw text. ALWAYS use a tool.
 """,
     tools=[
         insert_corrective_steps,
         add_steps_to_plan,
-        get_recovery_context
+        get_recovery_context,
+        ask_user
     ],
     handoffs=[handoff(executor_agent)],
     model_settings=ModelSettings(
@@ -131,12 +138,12 @@ WORKFLOW:
 2. DECISION:
    - IF VALID: 
      a) Call `submit_step_result` with the step_id and findings.
-     b) THEN (next turn): Output "Step Verified" to finish the step.
+     b) THEN (next turn): Call `answer_from_knowledge("Step Verified")` to finish the step.
    - IF FAILED/EMPTY: 
      a) Call `mark_step_failed` with the error.
      b) THEN (next turn): Hand off to Strategist.
 
-FORBIDDEN: Do not output text UNLESS the step is valid and you are finishing.
+FORBIDDEN: You must NEVER output raw text. ALWAYS use a tool. Use `answer_from_knowledge` to signal completion.
 """,
     tools=[
         get_current_plan_step, # Useful to confirm ID
@@ -161,18 +168,17 @@ You are the Lead Planner. Your ONLY job is to create a research plan.
 CRITICAL RULES:
 1. Use EXACT tool names.
 2. Call EXACTLY ONE tool per turn.
-3. Available tools: add_steps_to_plan
+3. Available tools: add_steps_to_plan, ask_user
 4. IMPORTANT: Plan steps should focus on actionable research tasks.
 5. FORBIDDEN: Do NOT include steps like "generate report", "summarize findings", or "create summary" in the intermediate steps of the plan. Reporting and summarization MUST only occur as the very last step.
+6. EMERGENCY ONLY: Use `ask_user` ONLY in critical situations when you cannot proceed without user clarification. This is an emergency tool.
 
 WORKFLOW:
 1. Call `add_steps_to_plan` with a list of 3-10 clear and actionable research tasks. "
 "Generate the final research report step should not be included in the plan, it is done by the Reporter agent by himself".
-2. In the next turn, output "Plan Created".
-
-FORBIDDEN: Do not hand off. Do not add commentary.
+2. In the next turn return "Plan Created"`.
 """,
-    tools=[add_steps_to_plan],
+    tools=[add_steps_to_plan, ask_user],
     handoffs=[], # No handoffs, returns to Runner
     model_settings=ModelSettings(
         parallel_tool_calls=False,

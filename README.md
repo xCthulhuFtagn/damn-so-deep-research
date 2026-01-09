@@ -1,11 +1,21 @@
-# Deep Research Swarm MVP — запуск
+# Deep Research Swarm — Система Автоматизированных Исследований
 
-Небольшое приложение на **Streamlit** для “deep research” на базе **OpenAI Swarm**. Хранит состояние/план в SQLite и показывает прогресс в сайдбаре.
+Приложение на **Streamlit** для глубоких автоматизированных исследований на базе **OpenAI Swarm**. Система использует мульти-агентную архитектуру для планирования, выполнения и анализа исследовательских задач с поддержкой веб-поиска, выполнения команд терминала и генерации отчетов.
+
+## Основные возможности
+
+- **Мульти-агентная архитектура**: Пять специализированных агентов (Planner, Executor, Evaluator, Strategist, Reporter) работают совместно для выполнения сложных исследовательских задач
+- **Мульти-пользовательская поддержка**: Изолированные сессии исследований для каждого пользователя с системой аутентификации
+- **Безопасное выполнение команд**: Система одобрения для команд терминала с визуальным отображением статуса в GUI
+- **Интеллектуальный веб-поиск**: Интеграция с SearXNG и продвинутая фильтрация результатов с использованием би-энкодеров и кросс-энкодеров
+- **Персистентность данных**: SQLite база данных для сохранения состояния между сессиями
+- **Docker поддержка**: Готовые конфигурации для запуска приложения и локального vLLM сервера
 
 ## Требования
 
 - Python 3.10+ (желательно 3.11)
 - `git` (нужен, потому что `swarm` ставится из GitHub)
+- Для локального vLLM: Docker, NVIDIA Container Toolkit, GPU с поддержкой CUDA
 
 ## Установка
 
@@ -32,17 +42,21 @@ OPENAI_API_KEY=ваш_ключ
 # MAX_TURNS=25
 # LOG_LEVEL=INFO
 # LOG_FILE=logs/app.log
+# MAX_SEARCH_RESULTS=6
+# MAX_FINAL_TOP_CHUNKS=3
 ```
 
 Что означает:
 
-- **`OPENAI_API_KEY`**: обязателен.
-- **`OPENAI_BASE_URL`**: опционально (например, если используете совместимый прокси/шлюз).
-- **`OPENAI_MODEL`**: модель (по умолчанию `gpt-4o`).
+- **`OPENAI_API_KEY`**: обязателен (или `EMPTY` для локального vLLM).
+- **`OPENAI_BASE_URL`**: опционально (например, если используете совместимый прокси/шлюз или локальный vLLM).
+- **`OPENAI_MODEL`**: модель (по умолчанию `gpt-oss-20b` для локального vLLM, или `gpt-4o` для OpenAI).
 - **`DB_NAME`**: имя файла SQLite (по умолчанию `research_state.db`, создаётся в папке проекта).
 - **`MAX_TURNS`**: лимит ходов в одном запуске Swarm (по умолчанию `25`).
 - **`LOG_LEVEL`**: уровень логов (`DEBUG`, `INFO`, `WARNING`, `ERROR`). По умолчанию `INFO`.
 - **`LOG_FILE`**: путь до файла логов (если задан — логи пишутся и в консоль, и в файл с ротацией).
+- **`MAX_SEARCH_RESULTS`**: максимальное количество результатов поиска для обработки (по умолчанию `6`).
+- **`MAX_FINAL_TOP_CHUNKS`**: количество финальных релевантных чанков после фильтрации (по умолчанию `3`).
 
 ## Запуск
 
@@ -54,12 +68,34 @@ streamlit run main.py
 
 ## Как пользоваться
 
-- Введите тему исследования в поле ввода чата.
-- Сайдбар **“Research Plan”** показывает план и статусы шагов (TODO/IN_PROGRESS/DONE/FAILED).
-- Сайдбар **“Security Approvals”** нужен для команд терминала: если агент хочет выполнить команду, она попадает в approvals, и её нужно вручную **Approve**.
-- Кнопка **“Reset Research”** очищает БД и историю в UI для новой сессии.
+### Первый запуск
 
-## Логи (важно)
+1. При первом открытии приложения вам будет предложено зарегистрироваться или войти.
+2. После входа создайте новый research run через кнопку **"➕ New Research Run"** в сайдбаре.
+3. Введите тему исследования в поле ввода чата.
+
+### Интерфейс
+
+- **Сайдбар "Research Plan"**: Показывает план исследования и статусы шагов (TODO/IN_PROGRESS/DONE/FAILED) с цветовой индикацией.
+- **Сайдбар "Security Approvals"**: Отображает команды терминала, ожидающие одобрения. Вы можете одобрить (✅) или запретить (❌) каждую команду.
+- **Основной чат**: Показывает всю историю взаимодействия с агентами, включая:
+  - Статусы одобрения команд терминала (⏳ Ожидание одобрения, ✅ Одобрено, ❌ Запрещено)
+  - Результаты веб-поиска с количеством найденных источников
+  - Выполненные инструменты и их результаты
+  - Финальные отчеты исследования
+- **Кнопки управления**: 
+  - **⏸️ Pause Research**: Приостанавливает выполнение исследования
+  - **▶️ Resume Research**: Возобновляет выполнение после паузы
+
+### Процесс исследования
+
+1. **Планирование**: Агент Planner создает план из 3-10 исследовательских шагов.
+2. **Выполнение**: Агент Executor последовательно выполняет каждый шаг, используя веб-поиск, чтение файлов или выполнение команд (с одобрением).
+3. **Оценка**: Агент Evaluator проверяет результаты каждого шага.
+4. **Восстановление**: При неудаче шага агент Strategist создает корректирующие шаги.
+5. **Отчетность**: После завершения всех шагов агент Reporter генерирует финальный отчет.
+
+## Логи
 
 Логи выводятся в консоль, где запущен Streamlit. Чтобы включить подробности:
 
@@ -73,117 +109,135 @@ LOG_LEVEL=DEBUG streamlit run main.py
 LOG_FILE=logs/app.log streamlit run main.py
 ```
 
-## Multi-User Architecture
+## Архитектура системы
 
-The application has been refactored to support multiple users and isolated research runs.
+### Мульти-агентная архитектура
 
-- **User Authentication**: A login and registration system has been implemented. Users have their own accounts and can only see their own research runs.
-- **Run Isolation**: Each research run is now tied to a user and has its own isolated state, including the plan, messages, and approvals. This is managed through a `run_id` in the database.
-- **Database Schema**: The database schema has been updated to support multiple users and runs. New tables `users` and `runs` have been added, and existing tables have been modified to include `run_id`.
+Система использует архитектуру **OpenAI Swarm** с пятью специализированными агентами:
 
-## Структура проекта (кратко)
+#### 1. **Planner (Планировщик)**
+- **Роль**: Создание структурированного плана исследования
+- **Инструменты**: `add_steps_to_plan`, `ask_user`
+- **Выход**: План из 3-10 конкретных исследовательских задач
 
-- `main.py`: The main Streamlit application interface, responsible for user authentication, run management, and orchestrating the agent swarm.
-- `research_agents.py`: Defines the various AI agents (`Planner`, `Executor`, `Evaluator`, `Strategist`, `Reporter`) and their specific instructions, tools, and handoff mechanisms.
-- `tools/`: Directory containing the tools that agents can use.
-  - `search.py`: Web search tool.
-  - `planning.py`: Tools for creating and modifying the research plan.
-  - `execution.py`: Tools for executing commands and reading files.
-  - `reporting.py`: Tools for reporting results.
-  - `legacy.py`: Legacy tools.
-- `utils/`: Directory for utility modules.
-  - `web_scraper.py`: Web scraping logic.
-  - `text_processing.py`: Text processing logic.
-  - `context.py`: Defines context variables for sharing state within a thread.
-- `database.py`: Manages the SQLite database interactions. It has been refactored to a `DatabaseService` class that supports multi-tenancy.
-- `db_session.py`: Acts as an adapter between the `agents` SDK's session memory and the `DatabaseService` for persisting conversation history and research state.
-- `schema.py`: Defines Pydantic models for data validation, like `ChatMessage`.
-- `config.py`: Handles loading environment variables from `.env` and provides application-wide configuration settings.
-- `runner.py`: Contains the core logic for running the agent swarm in background threads, managing agent handoffs, and setting the context for each run.
-- `logging_setup.py`: Configures the application's logging system.
-- `requirements.txt`: Lists all Python dependencies required for the project.
-- `docker-compose.yml`: Docker Compose configuration for setting up a local vLLM server.
-- `Dockerfile`: Defines the Docker image for the main application.
-- `searxng/`: Contains configuration files for the SearXNG metasearch engine.
+#### 2. **Executor (Исполнитель)**
+- **Роль**: Выполнение исследовательских шагов
+- **Инструменты**: `get_current_plan_step`, `intelligent_web_search`, `read_file`, `execute_terminal_command`, `answer_from_knowledge`, `ask_user`
+- **Особенности**: 
+  - Всегда начинает с получения текущего шага плана
+  - Ограничение: максимум 3 вызова `intelligent_web_search` на шаг
+  - Передает управление Evaluator после сбора данных
 
-### Логика работы и Контекст Агентов
+#### 3. **Evaluator (Оценщик)**
+- **Роль**: Валидация результатов исследования
+- **Инструменты**: `get_current_plan_step`, `submit_step_result`, `mark_step_failed`
+- **Логика**:
+  - При успехе: сохраняет результат и помечает шаг как DONE
+  - При неудаче: помечает шаг как FAILED и передает управление Strategist
 
-Проект использует архитектуру **OpenAI Swarm**, разделяя процесс на три фазы. Вот пошаговое объяснение того, что получает и генерирует каждый агент:
+#### 4. **Strategist (Стратег)**
+- **Роль**: Восстановление после неудач
+- **Инструменты**: `insert_corrective_steps`, `add_steps_to_plan`, `get_recovery_context`, `ask_user`
+- **Особенности**: Вставляет корректирующие шаги после провалившегося шага или добавляет новые шаги в конец плана
 
-#### **Фаза 1: Планирование**
+#### 5. **Reporter (Репортер)**
+- **Роль**: Генерация финального отчета
+- **Инструменты**: `get_research_summary`
+- **Выход**: Исчерпывающий Markdown отчет, синтезирующий все результаты исследования
 
-**Агент: `Planner` (Планировщик)**
-*   **Триггер:** Пользователь вводит тему исследования (например, "Проанализировать жизнеспособность...").
-*   **Контекст (Входные данные):**
-    *   **Запрос пользователя:** Исходная тема исследования.
-    *   **Статус проекта:** Изначально пуст (или статус предыдущего плана при итерации).
-    *   **Инструкции:** "Вы — Главный Планировщик. Ваша ЕДИНСТВЕННАЯ работа — создать план исследования."
-*   **Генерирует:**
-    *   **Вызов инструмента:** `add_steps_to_plan(steps=[...])`. Создает структурированный список из 3-10 конкретных исследовательских задач в базе данных.
-    *   **Текст:** "Plan Created".
+### Поток выполнения
 
----
+```mermaid
+graph TD
+    User["Пользователь"] -->|Запрос| Planner["Planner Agent"]
+    Planner -->|Создает план| PlanDB["База данных: plan"]
+    PlanDB -->|Триггер| Executor["Executor Agent"]
+    Executor -->|Использует| Tools["Инструменты:<br/>- intelligent_web_search<br/>- execute_terminal_command<br/>- read_file"]
+    Tools -->|Результаты| Evaluator["Evaluator Agent"]
+    Evaluator -->|Успех| PlanDB
+    Evaluator -->|Неудача| Strategist["Strategist Agent"]
+    Strategist -->|Корректирующие шаги| PlanDB
+    PlanDB -->|Все шаги DONE| Reporter["Reporter Agent"]
+    Reporter -->|Финальный отчет| User
+```
 
-#### **Фаза 2: Выполнение (Цикл)**
+### Мульти-пользовательская архитектура
 
-Эта фаза выполняется в цикле для каждого шага, определенного в плане. Агенты используют "Память в рамках задачи" (`DBSession("main_research")`), что означает, что они видят только историю, относящуюся к *текущему* активному шагу.
+Приложение поддерживает несколько пользователей с полной изоляцией данных:
 
-**Агент: `Executor` (Исполнитель)**
-*   **Триггер:** Система выбирает следующий шаг со статусом `TODO` из базы данных.
-*   **Контекст (Входные данные):**
-    *   **Системный триггер:** "Execute Step X: [Описание шага]".
-    *   **Статус проекта:** Сводка всего плана и детали текущего шага.
-    *   **История задачи:** Выводы предыдущих инструментов и попытки *только для этого конкретного шага*.
-*   **Генерирует:**
-    *   **Вызовы инструментов:**
-        *   `get_current_plan_step` (Всегда вызывается первым).
-        *   `intelligent_web_search`, `read_file`, `execute_terminal_command`, `answer_from_knowledge`.
-    *   **Передача управления (Handoff):** Когда собрано достаточно данных, передает управление агенту **Evaluator**.
+- **Аутентификация**: Система регистрации и входа с хешированием паролей (bcrypt)
+- **Изоляция сессий**: Каждый research run привязан к пользователю через `user_id`
+- **База данных**: Все таблицы используют `run_id` для изоляции данных между сессиями
 
-**Агент: `Evaluator` (Оценщик)**
-*   **Триггер:** Передача управления от `Executor` с собранными данными.
-*   **Контекст (Входные данные):**
-    *   **Полный контекст:** Тот же, что у Executor, плюс самые последние данные/выводы инструментов, которые только что сгенерировал Executor.
-    *   **Инструкции:** "Вы — QA Оценщик. Вы проверяете результаты исследования."
-*   **Генерирует:**
-    *   **Решение (Успех):** Вызывает `submit_step_result(step_id, findings)` для сохранения результата в БД и помечает шаг как `DONE`.
-    *   **Решение (Неудача):** Вызывает `mark_step_failed(error_msg)` и передает управление агенту **Strategist**.
+### Система безопасности команд терминала
 
-**Агент: `Strategist` (Стратег) (Запускается только при неудаче шага)**
-*   **Триггер:** Передача управления от `Evaluator` после неудачи.
-*   **Контекст (Входные данные):**
-    *   **Контекст сбоя:** Конкретное сообщение об ошибке или причина, по которой шаг не удался.
-    *   **Статус плана:** Текущее состояние плана.
-*   **Генерирует:**
-    *   **Вызовы инструментов:**
-        *   `insert_corrective_steps(steps=[...])`: Вставляет новые, более мелкие промежуточные шаги для исправления проблемы.
-        *   `add_steps_to_plan(...)`: Добавляет шаги в конец, если масштаб был недооценен.
-    *   **Передача управления (Handoff):** Возвращает управление агенту **Executor** для попытки выполнения (теперь уже обновленного) плана.
+Для обеспечения безопасности выполнения команд терминала реализована система одобрения:
 
----
+1. **Запрос одобрения**: Когда агент вызывает `execute_terminal_command`, команда сохраняется в таблице `approvals` со статусом "ожидание" (0)
+2. **Визуализация**: 
+   - В сайдбаре отображается список команд, ожидающих одобрения
+   - В основном чате показывается статус каждой команды: ⏳ Ожидание, ✅ Одобрено, ❌ Запрещено
+3. **Одобрение/Запрет**: Пользователь может одобрить или запретить команду через кнопки в сайдбаре
+4. **Выполнение**: Команда выполняется только после одобрения, результат возвращается агенту
 
-#### **Фаза 3: Отчетность**
+### Интеграция SearXNG
 
-**Агент: `Reporter` (Репортер)**
-*   **Триггер:** Все шаги в плане помечены как `DONE`.
-*   **Контекст (Входные данные):**
-    *   **Системный триггер:** "All steps completed. Generate the final report."
-    *   **Статус проекта:** Показывает, что план выполнен на 100%.
-*   **Генерирует:**
-    *   **Вызов инструмента:** `get_research_summary`. Извлекает все сохраненные `findings` (результаты) из каждого завершенного шага в базе данных.
-    *   **Финальный вывод:** Исчерпывающий отчет в формате Markdown, синтезирующий все полученные данные.
+Система использует **SearXNG** (метапоисковая система) для веб-поиска:
 
-### Использование Базы Данных (SQLite)
+- **Конфигурация**: Настройки в `searxng/settings.yml` и `searxng/limiter.toml`
+- **Поисковые движки**: Google, Brave, Wikipedia (настраиваемые)
+- **API**: Доступ через `http://localhost:666/search`
+- **Алгоритм фильтрации**:
+  1. Получение ссылок через SearXNG
+  2. Параллельное скачивание и умная нарезка текста
+  3. Bi-Encoder: Векторизация и грубый отсев (Top-20)
+  4. Cross-Encoder: Точная перепроверка и ранжирование (Top-3)
 
-Проект активно использует базу данных SQLite (`research_state.db`) для управления состоянием исследования и обеспечения персистентности между сессиями. Основные таблицы и их функции:
+### Структура проекта
 
-- **`plan`**: Хранит план исследования. Каждая запись представляет собой шаг с описанием, текущим статусом (`TODO`, `IN_PROGRESS`, `DONE`, `FAILED`) и результатом выполнения.
-- **`approvals`**: Используется для управления одобрениями команд терминала. Если агент предлагает выполнить команду, она сначала сохраняется здесь, ожидая ручного одобрения пользователем через UI.
-- **`messages`**: Сохраняет всю историю сообщений и взаимодействий между агентами, включая роли, контент, вызовы инструментов и их результаты. Это обеспечивает возможность отслеживания всего процесса.
-- **`global_state`**: Хранит общие флаги состояния, такие как `swarm_running` (индикатор активности роя) и `stop_requested` (флаг для остановки выполнения).
+```
+damn-so-deep-research/
+├── main.py                 # Основной Streamlit интерфейс: аутентификация, управление runs, отображение чата
+├── research_agents.py      # Определения всех агентов (Planner, Executor, Evaluator, Strategist, Reporter)
+├── runner.py               # Логика запуска swarm в фоновых потоках, управление handoffs, контекст runs
+├── database.py             # DatabaseService класс: управление SQLite, мульти-тенантность
+├── db_session.py           # Адаптер между SDK agents и DatabaseService для персистентности истории
+├── schema.py               # Pydantic модели для валидации данных (ChatMessage и др.)
+├── config.py               # Загрузка переменных окружения из .env, настройки приложения
+├── logging_setup.py        # Конфигурация системы логирования
+├── requirements.txt        # Python зависимости
+├── docker-compose.yml       # Конфигурация для локального vLLM и SearXNG
+├── Dockerfile              # Docker образ для основного приложения
+├── tools/                  # Инструменты для агентов
+│   ├── search.py           # intelligent_web_search: интеграция с SearXNG, фильтрация результатов
+│   ├── planning.py         # add_steps_to_plan, get_current_plan_step, insert_corrective_steps
+│   ├── execution.py        # execute_terminal_command, read_file, answer_from_knowledge, ask_user
+│   ├── reporting.py        # get_research_summary, submit_step_result, mark_step_failed, get_recovery_context
+│   └── legacy.py           # Устаревшие инструменты
+├── utils/                  # Утилиты
+│   ├── web_scraper.py      # Логика веб-скрапинга и обработки URL
+│   ├── text_processing.py  # Би-энкодеры, кросс-энкодеры, нарезка текста
+│   └── context.py          # Контекстные переменные для разделения состояния в потоке (current_run_id)
+└── searxng/                # Конфигурация SearXNG
+    ├── settings.yml        # Настройки поисковых движков и параметров
+    └── limiter.toml        # Настройки лимитов запросов
+```
 
-База данных инициализируется и управляется через `database.py`, а `db_session.py` предоставляет интерфейс для сохранения и загрузки истории сообщений агентов, адаптируя ее к формату, ожидаемому SDK агентов.
+### База данных (SQLite)
 
+Проект использует SQLite (`research_state.db`) для управления состоянием исследования. Основные таблицы:
+
+- **`users`**: Пользователи системы (id, username, password_hash, created_at)
+- **`runs`**: Исследовательские сессии (id, user_id, title, status, created_at)
+- **`plan`**: План исследования (id, run_id, step_number, description, status, result, feedback)
+  - Статусы: `TODO`, `IN_PROGRESS`, `DONE`, `FAILED`
+- **`approvals`**: Одобрения команд терминала (command_hash, run_id, command_text, approved)
+  - Статусы: `0` (ожидание), `1` (одобрено), `-1` (запрещено)
+- **`messages`**: История сообщений и взаимодействий (id, run_id, role, content, tool_calls, tool_call_id, sender, session_id, task_number, timestamp)
+- **`run_state`**: Состояние выполнения (run_id, key, value)
+  - Ключи: `swarm_running`, `pause_requested`, `active_task`, `pending_question`, `pending_question_response`
+
+База данных инициализируется автоматически при первом запуске через `database.py`. Используется WAL (Write-Ahead Logging) режим для лучшей конкурентности.
 
 ## Docker
 
@@ -194,27 +248,94 @@ docker build -t research-swarm .
 docker run -p 8501:8501 --env-file .env -v $(pwd)/logs:/app/logs -v $(pwd)/research_state.db:/app/research_state.db research-swarm
 ```
 
-### Запуск vLLM (Локальный LLM)
+### Запуск vLLM и SearXNG
 
-Мы подготовили `docker-compose.yml` с правильными настройками для модели `gpt-oss-20b` (включен `auto-tool-choice` и парсер `openai`).
+Мы подготовили `docker-compose.yml` с правильными настройками для локального запуска:
 
-1. Убедитесь, что у вас установлен Docker и NVIDIA Container Toolkit.
-2. Задайте токен Hugging Face (если модель требует доступа):
+1. **Требования**: Docker и NVIDIA Container Toolkit (для vLLM)
+2. **Настройка токена Hugging Face** (если модель требует доступа):
    ```bash
    export HUGGING_FACE_HUB_TOKEN=your_token_here
    ```
-3. Запустите vLLM:
+3. **Запуск**:
    ```bash
    docker compose up -d
    ```
 
-Сервер будет доступен по адресу `http://localhost:8001/v1`.
+Это запустит:
+- **vLLM сервер** на `http://localhost:8001/v1` с моделью `openai/gpt-oss-20b`
+- **SearXNG** на `http://localhost:666`
 
-Настройки в `.env` для приложения включают, но не ограничены:
+Настройки в `.env` для работы с локальным vLLM:
+
 ```bash
 OPENAI_BASE_URL=http://localhost:8001/v1
 OPENAI_API_KEY=EMPTY
 OPENAI_MODEL=openai/gpt-oss-20b
 ```
 
+### Конфигурация SearXNG
 
+SearXNG запускается как отдельный сервис в Docker Compose. Конфигурация находится в `searxng/`:
+- `settings.yml`: Настройки поисковых движков (Google, Brave, Wikipedia)
+- `limiter.toml`: Настройки лимитов запросов
+
+По умолчанию SearXNG доступен на порту 666 и интегрирован в инструмент `intelligent_web_search`.
+
+## Дополнительная информация
+
+### Логика работы агентов
+
+#### Фаза 1: Планирование
+
+**Агент: `Planner` (Планировщик)**
+- **Триггер**: Пользователь вводит тему исследования
+- **Контекст**: Исходный запрос пользователя, пустой или существующий план
+- **Действия**: 
+  - Вызывает `add_steps_to_plan` с 3-10 конкретными исследовательскими задачами
+  - Возвращает "Plan Created"
+
+#### Фаза 2: Выполнение (Цикл)
+
+Эта фаза выполняется в цикле для каждого шага плана. Агенты используют память в рамках задачи, видя только историю текущего активного шага.
+
+**Агент: `Executor` (Исполнитель)**
+- **Триггер**: Система выбирает следующий шаг со статусом `TODO`
+- **Контекст**: Системный триггер "Execute Step X", статус плана, история текущего шага
+- **Действия**:
+  - Всегда начинает с `get_current_plan_step`
+  - Использует `intelligent_web_search`, `read_file`, `execute_terminal_command` для сбора данных
+  - Передает управление `Evaluator` после сбора информации
+
+**Агент: `Evaluator` (Оценщик)**
+- **Триггер**: Handoff от `Executor` с собранными данными
+- **Контекст**: Полный контекст Executor + последние результаты инструментов
+- **Действия**:
+  - При успехе: вызывает `submit_step_result` и помечает шаг как `DONE`
+  - При неудаче: вызывает `mark_step_failed` и передает управление `Strategist`
+
+**Агент: `Strategist` (Стратег)** (только при неудаче)
+- **Триггер**: Handoff от `Evaluator` после неудачи
+- **Контекст**: Контекст сбоя, текущее состояние плана
+- **Действия**:
+  - Вызывает `insert_corrective_steps` для вставки корректирующих шагов
+  - Или `add_steps_to_plan` для добавления шагов в конец
+  - Передает управление `Executor` для повторной попытки
+
+#### Фаза 3: Отчетность
+
+**Агент: `Reporter` (Репортер)**
+- **Триггер**: Все шаги в плане помечены как `DONE`
+- **Контекст**: Системный триггер "All steps completed", план выполнен на 100%
+- **Действия**:
+  - Вызывает `get_research_summary` для получения всех результатов
+  - Генерирует исчерпывающий Markdown отчет, синтезирующий все данные
+  - Отчет должен включать: "Автор исследования: damn-so-deep-research"
+
+### Особенности реализации
+
+- **Контекст выполнения**: Каждый run имеет свой `run_id`, который используется для изоляции данных
+- **Управление паузой**: Пользователь может приостановить и возобновить выполнение исследования
+- **Вопросы к пользователю**: Агенты могут задавать вопросы через инструмент `ask_user` в критических ситуациях
+- **Оптимизация контекста**: Система автоматически обрезает большие результаты инструментов для экономии контекста
+- **Обработка ошибок**: При сбоях агент Strategist создает корректирующие шаги для восстановления

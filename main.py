@@ -2,6 +2,7 @@ import streamlit as st
 import logging
 import json
 import time
+import hashlib
 
 from logging_setup import setup_logging
 from research_agents import planner_agent, executor_agent
@@ -85,7 +86,7 @@ else:
         run_id = st.session_state.active_run_id
         run_title = db_service.get_run_title(run_id) or "Research"
 
-        # --- Stop/Resume Control ---
+        # --- Pause/Resume Control ---
         is_running = db_service.is_swarm_running(run_id)
         # Zombie detection: If DB says running but no thread exists locally
         if is_running and run_id not in runner.active_runs:
@@ -95,16 +96,21 @@ else:
             st.rerun()
 
         if is_running:
-            if st.sidebar.button("🛑 Stop Research", key=f"stop_sidebar_{run_id}", use_container_width=True):
-                db_service.set_stop_signal(run_id, True)
-                st.sidebar.info("Stop signal sent.")
+            if st.sidebar.button("⏸️ Pause Research", key=f"pause_sidebar_{run_id}", use_container_width=True):
+                db_service.set_pause_signal(run_id, True)
+                st.sidebar.info("Pause signal sent.")
         else:
+            # Check if run is completed
+            user_runs = db_service.get_user_runs(st.session_state.user_id)
+            current_run = next((r for r in user_runs if r['id'] == run_id), None)
+            run_completed = current_run and current_run.get('status') == 'completed'
+            
             plan_df = db_service.get_all_plan(run_id)
             if not plan_df.empty:
                 incomplete_steps = plan_df[plan_df['status'].isin(['TODO', 'IN_PROGRESS', 'FAILED'])]
-                if not incomplete_steps.empty:
+                if not incomplete_steps.empty and not run_completed:
                     if st.sidebar.button("▶️ Resume Research", key=f"resume_sidebar_{run_id}", use_container_width=True):
-                        db_service.set_stop_signal(run_id, False)
+                        db_service.set_pause_signal(run_id, False)
                         runner.run_in_background(
                             run_id=run_id,
                             user_id=st.session_state.user_id,
@@ -122,6 +128,18 @@ else:
             st.sidebar.dataframe(plan_df_styled)
         else:
             st.sidebar.info("Plan is empty for this run.")
+
+        # --- Agent Questions ---
+        pending_question = db_service._get_run_state(run_id, 'pending_question')
+        if pending_question:
+            st.sidebar.subheader("❓ Agent Question")
+            st.sidebar.warning(pending_question)
+            with st.sidebar.form(f"answer_question_{run_id}"):
+                answer = st.text_input("Your answer:", key=f"answer_input_{run_id}")
+                submitted = st.form_submit_button("Submit Answer")
+                if submitted and answer:
+                    db_service._set_run_state(run_id, 'pending_question_response', answer)
+                    st.rerun()
 
         st.sidebar.subheader("🛡️ Security Approvals")
         approvals_df = db_service.get_pending_approvals(run_id)
@@ -167,11 +185,28 @@ else:
         # --- Main Chat Area ---
         display_messages = get_display_messages(run_id)
         for msg in display_messages:
-            with st.chat_message(msg.role):
+            # Определяем, является ли сообщение автоматическим триггером системы
+            system_prefixes = ("Execute Step", "An error occurred", "An internal error occurred", "Plan created", "All steps completed", "[INTERNAL SYSTEM NOTIFICATION]:")
+            is_automated = msg.role == "user" and msg.content and any(msg.content.startswith(p) for p in system_prefixes)
+            
+            # Выбираем аватар: робот для автоматики, человек для юзера, мозг для ассистента
+            if is_automated:
+                avatar = "🤖"
+            elif msg.role == "user":
+                avatar = "👤"
+            elif msg.role == "assistant":
+                avatar = "🧠"
+            else:
+                avatar = None
+            
+            with st.chat_message(msg.role, avatar=avatar):
                 if msg.role == "user":
-                    system_prefixes = ("Execute Step", "An error occurred", "An internal error occurred", "Plan created", "All steps completed")
-                    if msg.content and any(msg.content.startswith(p) for p in system_prefixes):
-                        st.markdown(msg.content)
+                    if is_automated:
+                        # Убираем префикс [INTERNAL SYSTEM NOTIFICATION]: если он есть
+                        content = msg.content
+                        if content.startswith("[INTERNAL SYSTEM NOTIFICATION]:"):
+                            content = content.replace("[INTERNAL SYSTEM NOTIFICATION]:", "").strip()
+                        st.info(content)
                     else:
                         st.markdown(f"**User Query:** {msg.content}")
                 elif msg.tool_calls:
@@ -195,7 +230,45 @@ else:
                             
                             # Handle result display for web search
                             result = tool_call.get('result')
-                            if tool_name == "intelligent_web_search":
+                            if tool_name == "execute_terminal_command":
+                                # Extract command from arguments
+                                try:
+                                    tool_args = json.loads(tool_call['function']['arguments'])
+                                    command = tool_args.get('command', '')
+                                    if command:
+                                        cmd_hash = hashlib.md5(command.encode()).hexdigest()
+                                        approval_status = db_service.get_approval_status(run_id, cmd_hash)
+                                        
+                                        if result is None:
+                                            if approval_status is None:
+                                                tool_calls_md += f"> ⏳ Ожидание одобрения команды...\n"
+                                            elif approval_status == 0:
+                                                tool_calls_md += f"> ⏳ Ожидание одобрения команды...\n"
+                                            elif approval_status == 1:
+                                                tool_calls_md += f"> ✅ Команда одобрена, выполняется...\n"
+                                            elif approval_status == -1:
+                                                tool_calls_md += f"> ❌ Команда запрещена\n"
+                                        else:
+                                            result_str = str(result)
+                                            if approval_status == 1:
+                                                tool_calls_md += f"> ✅ Команда одобрена и выполнена\n"
+                                                if "Execution Error" in result_str:
+                                                    tool_calls_md += f"> ⚠️ {result_str}\n"
+                                                elif result_str:
+                                                    tool_calls_md += f"> 📋 Результат: {result_str[:200]}...\n" if len(result_str) > 200 else f"> 📋 Результат: {result_str}\n"
+                                            elif approval_status == -1:
+                                                tool_calls_md += f"> ❌ Команда запрещена пользователем\n"
+                                    else:
+                                        if result is None:
+                                            tool_calls_md += f"> ⏳ Ожидание выполнения...\n"
+                                        else:
+                                            tool_calls_md += f"> 📋 {str(result)[:200]}...\n" if len(str(result)) > 200 else f"> 📋 {str(result)}\n"
+                                except (json.JSONDecodeError, TypeError, AttributeError):
+                                    if result is None:
+                                        tool_calls_md += f"> ⏳ Ожидание выполнения...\n"
+                                    else:
+                                        tool_calls_md += f"> 📋 {str(result)[:200]}...\n" if len(str(result)) > 200 else f"> 📋 {str(result)}\n"
+                            elif tool_name == "intelligent_web_search":
                                 result_str = str(result or "")
                                 failure_markers = [
                                     "ничего не найдено", "ошибка", "не удалось", 
