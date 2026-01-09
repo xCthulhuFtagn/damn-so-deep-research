@@ -240,34 +240,36 @@ else:
                                         approval_status = db_service.get_approval_status(run_id, cmd_hash)
                                         
                                         if result is None:
-                                            if approval_status is None:
+                                            if approval_status in (None, 0):
                                                 tool_calls_md += f"> ⏳ Ожидание одобрения команды...\n"
-                                            elif approval_status == 0:
-                                                tool_calls_md += f"> ⏳ Ожидание одобрения команды...\n"
-                                            elif approval_status == 1:
-                                                tool_calls_md += f"> ✅ Команда одобрена, выполняется...\n"
-                                            elif approval_status == -1:
-                                                tool_calls_md += f"> ❌ Команда запрещена\n"
+                                            else:
+                                                tool_calls_md += f"> ⏳ Учитывается выбор пользователя...\n"
                                         else:
                                             result_str = str(result)
                                             if approval_status == 1:
                                                 tool_calls_md += f"> ✅ Команда одобрена и выполнена\n"
-                                                if "Execution Error" in result_str:
-                                                    tool_calls_md += f"> ⚠️ {result_str}\n"
-                                                elif result_str:
-                                                    tool_calls_md += f"> 📋 Результат: {result_str[:200]}...\n" if len(result_str) > 200 else f"> 📋 Результат: {result_str}\n"
+                                                if result_str.startswith("Error") or result_str.startswith("Execution Error"):
+                                                    # Сокращенный вывод ошибок
+                                                    short_error = result_str[:150] + "..." if len(result_str) > 150 else result_str
+                                                    tool_calls_md += f"> ❌ {short_error}\n"
                                             elif approval_status == -1:
                                                 tool_calls_md += f"> ❌ Команда запрещена пользователем\n"
                                     else:
                                         if result is None:
                                             tool_calls_md += f"> ⏳ Ожидание выполнения...\n"
                                         else:
-                                            tool_calls_md += f"> 📋 {str(result)[:200]}...\n" if len(str(result)) > 200 else f"> 📋 {str(result)}\n"
+                                            result_str = str(result)
+                                            if result_str.startswith("Error") or result_str.startswith("Execution Error"):
+                                                short_error = result_str[:150] + "..." if len(result_str) > 150 else result_str
+                                                tool_calls_md += f"> ❌ {short_error}\n"
                                 except (json.JSONDecodeError, TypeError, AttributeError):
                                     if result is None:
                                         tool_calls_md += f"> ⏳ Ожидание выполнения...\n"
                                     else:
-                                        tool_calls_md += f"> 📋 {str(result)[:200]}...\n" if len(str(result)) > 200 else f"> 📋 {str(result)}\n"
+                                        result_str = str(result)
+                                        if result_str.startswith("Error") or result_str.startswith("Execution Error"):
+                                            short_error = result_str[:150] + "..." if len(result_str) > 150 else result_str
+                                            tool_calls_md += f"> ❌ {short_error}\n"
                             elif tool_name == "intelligent_web_search":
                                 result_str = str(result or "")
                                 failure_markers = [

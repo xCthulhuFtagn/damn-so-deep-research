@@ -50,7 +50,12 @@ def execute_terminal_command(command: str) -> str:
         try:
             result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=10)
             logger.info("execute_terminal_command: executed for run_id=%s hash=%s rc=%s", run_id, cmd_hash, result.returncode)
-            return f"Output:\n{result.stdout}\nErrors:\n{result.stderr}"
+            
+            combined_output = (result.stdout + "\n" + result.stderr).strip()
+            if result.returncode == 0:
+                return combined_output if combined_output else "Command executed successfully."
+            else:
+                return f"Error (exit code {result.returncode}):\n{combined_output}"
         except Exception as e:
             logger.info("execute_terminal_command failed for run_id=%s hash=%s", run_id, cmd_hash)
             return f"Execution Error: {e}"
