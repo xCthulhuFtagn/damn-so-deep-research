@@ -203,20 +203,12 @@ else:
                 avatar = "🧠"
             else:
                 avatar = None
+                
+            if msg.sender is None and not msg.content:
+                continue
             
             with st.chat_message(msg.role, avatar=avatar):
-                if msg.role == "system":
-                    # Show system errors/feedback prominently
-                    if "Error" in msg.content or "Feedback" in msg.content:
-                        # Truncate long error messages to 300 characters
-                        display_content = msg.content
-                        if len(display_content) > 300:
-                            display_content = display_content[:300] + "... (truncated)"
-                        st.error(f"System: {display_content}")
-                    else:
-                        # Skip other system messages (like project status updates) to avoid clutter
-                        pass
-                elif msg.role == "user":
+                if msg.role == "user":
                     if is_automated:
                         # Убираем префикс [INTERNAL SYSTEM NOTIFICATION]: если он есть
                         content = msg.content
