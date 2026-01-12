@@ -22,7 +22,7 @@ def get_display_messages(run_id):
     tool_results = {msg.tool_call_id: msg.content for msg in messages if msg.role == 'tool'}
 
     for msg in messages:
-        if msg.role == 'system' or msg.role == 'tool':
+        if msg.role == 'tool':
             continue
 
         if msg.tool_calls:
@@ -43,7 +43,7 @@ def get_display_messages(run_id):
     return display_messages
 
 def highlight_status(s):
-    return ['color: #2ECC71' if v == 'DONE' else 'color: #E74C3C' if v == 'FAILED' else 'color: #F1C40F' if v == 'TODO' else '' for v in s]
+    return ['color: #2ECC71' if v == 'DONE' else 'color: #E74C3C' if v == 'FAILED' else 'color: #F1C40F' if v == 'TODO' else 'color: #3498DB' if v == 'IN_PROGRESS' else '' for v in s]
 
 
 # --- Authentication ---
@@ -128,8 +128,9 @@ else:
         st.sidebar.subheader("📋 Research Plan")
         plan_df = db_service.get_all_plan(run_id)
         if not plan_df.empty:
-            plan_df_styled = plan_df[["step_number", "description", "status"]].style.apply(highlight_status, subset=['status'])
-            st.sidebar.dataframe(plan_df_styled)
+            plan_df_display = plan_df.set_index("step_number")[["description", "status"]]
+            plan_df_styled = plan_df_display.style.apply(highlight_status, subset=['status'])
+            st.sidebar.dataframe(plan_df_styled, hide_index=False)
         else:
             st.sidebar.info("Plan is empty for this run.")
 
@@ -204,7 +205,18 @@ else:
                 avatar = None
             
             with st.chat_message(msg.role, avatar=avatar):
-                if msg.role == "user":
+                if msg.role == "system":
+                    # Show system errors/feedback prominently
+                    if "Error" in msg.content or "Feedback" in msg.content:
+                        # Truncate long error messages to 300 characters
+                        display_content = msg.content
+                        if len(display_content) > 300:
+                            display_content = display_content[:300] + "... (truncated)"
+                        st.error(f"System: {display_content}")
+                    else:
+                        # Skip other system messages (like project status updates) to avoid clutter
+                        pass
+                elif msg.role == "user":
                     if is_automated:
                         # Убираем префикс [INTERNAL SYSTEM NOTIFICATION]: если он есть
                         content = msg.content

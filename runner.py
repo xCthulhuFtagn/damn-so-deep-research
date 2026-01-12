@@ -99,11 +99,17 @@ class SwarmRunner:
                         logger.info("No more steps for run_id=%s. Execution Phase Complete.", run_id)
                         break
                     
+                    # ISOLATION: Explicitly set active task so DBSession filters messages correctly
+                    db_service.set_active_task(run_id, next_step['step_number'])
+                    
+                    # UI UPDATE: Mark step as IN_PROGRESS
+                    db_service.update_step_status(next_step['id'], "IN_PROGRESS")
+                    
                     logger.info(f"Executing Step {next_step['step_number']} for run {run_id}: {next_step['description']}")
                     step_input = f"Execute Step {next_step['step_number']}: {next_step['description']}"
                     
                     try:
-                        _execute_phase(run_id, current_agent, step_input, session, max_turns, run_config)
+                        _execute_phase(run_id, executor_agent, step_input, session, max_turns, run_config)
                     except Exception as e:
                         logger.error(f"Step {next_step['step_number']} for run {run_id} failed: {e}")
                         
@@ -178,6 +184,24 @@ def _execute_phase(run_id: str, agent: Agent, input_text: str, session: DBSessio
                     
                     # Violation: Has content but no tool calls
                     if has_content and not has_tool_calls:
+                        # CHECK EXCEPTION: If the previous assistant message was a valid completion tool, ignore this chatter.
+                        # We need to look back one more step in history, or check if ANY recent message was a completion.
+                        # Since we re-load messages, let's check the last few.
+                        is_completed = False
+                        for m in reversed(messages[-5:]): # Check last 5 messages
+                            if m.role == "assistant" and m.tool_calls:
+                                for tc in m.tool_calls:
+                                    if isinstance(tc, dict):
+                                        fname = tc.get('function', {}).get('name')
+                                        if fname in ["submit_step_result", "mark_step_failed", "insert_corrective_steps"]:
+                                            is_completed = True
+                                            break
+                            if is_completed: break
+                        
+                        if is_completed:
+                            logger.info(f"Ignoring strict mode violation for {effective_agent_name} because step is completed/failed.")
+                            return
+                            
                         error_msg = f"Strict mode violation: Agent {effective_agent_name} output text without calling a tool. Text: {last_assistant.content[:200]}"
                         logger.warning(error_msg)
                         raise ModelBehaviorError(error_msg)
