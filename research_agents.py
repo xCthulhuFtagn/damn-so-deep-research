@@ -138,12 +138,12 @@ WORKFLOW:
 2. DECISION:
    - IF VALID: 
      a) Call `submit_step_result` with the step_id and findings.
-     b) THEN (next turn): Call `answer_from_knowledge("Step Verified")` to finish the step.
+     b) THEN (next turn): Hand off to Executor.
    - IF FAILED/EMPTY: 
      a) Call `mark_step_failed` with the error.
      b) THEN (next turn): Hand off to Strategist.
 
-FORBIDDEN: You must NEVER output raw text. ALWAYS use a tool. Use `answer_from_knowledge` to signal completion.
+FORBIDDEN: You must NEVER output raw text. ALWAYS use a tool.
 """,
     tools=[
         get_current_plan_step, # Useful to confirm ID
