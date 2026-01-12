@@ -5,7 +5,6 @@ pandas
 python-dotenv
 openai-agents
 requests
-trafilatura
 sentence-transformers
 torch
 langchain-text-splitters

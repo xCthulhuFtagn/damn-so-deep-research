@@ -38,3 +38,42 @@ services:
       - SEARXNG_BOT_DETECTION=0 
     restart: always
 
+  firecrawl-api:
+    image: mendable/firecrawl-api:latest
+    container_name: firecrawl-api
+    ports:
+      - "3002:3002"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - PLAYWRIGHT_MICROSERVICE_URL=http://playwright-service:3000
+      - SEARCH_ENGINE=searxng
+      - SEARXNG_URL=http://searxng:8080
+      - PORT=3002
+      # For local dev, we might not need an API key, but Firecrawl often expects one
+      - AUTH_TOKEN=dummy_token
+    depends_on:
+      - redis
+      - playwright-service
+      - searxng
+    restart: always
+
+  firecrawl-worker:
+    image: mendable/firecrawl-worker:latest
+    container_name: firecrawl-worker
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - PLAYWRIGHT_MICROSERVICE_URL=http://playwright-service:3000
+    depends_on:
+      - redis
+      - playwright-service
+    restart: always
+
+  playwright-service:
+    image: mendable/playwright-service:latest
+    container_name: playwright-service
+    restart: always
+
+  redis:
+    image: redis:alpine
+    container_name: redis
+    restart: always

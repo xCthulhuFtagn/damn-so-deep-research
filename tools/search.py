@@ -1,12 +1,10 @@
 import requests
-import concurrent.futures
 import torch
 import logging
 from sentence_transformers import util
 
 from agents import function_tool
-from config import MAX_SEARCH_RESULTS, MAX_FINAL_TOP_CHUNKS
-from utils.web_scraper import fetch_and_process_url
+from config import MAX_SEARCH_RESULTS, MAX_FINAL_TOP_CHUNKS, FIRECRAWL_BASE_URL, FIRECRAWL_API_KEY
 from utils.text_processing import bi_encoder, cross_encoder, text_splitter
 
 logger = logging.getLogger(__name__)
@@ -14,74 +12,83 @@ logger = logging.getLogger(__name__)
 @function_tool
 def intelligent_web_search(query: str) -> str:
     """
-    Выполняет поиск информации в интернете с глубокой фильтрацией контента.
+    Выполняет поиск информации в интернете через Firecrawl (Search API) с глубокой фильтрацией контента.
     
     Алгоритм:
-    1. Поиск ссылок через SearXNG.
-    2. Параллельное скачивание и умная нарезка (RecursiveCharacterTextSplitter + Merge).
+    1. Поиск и автоматический скрейпинг через Firecrawl Search API.
+    2. Нарезка полученного контента на чанки.
     3. Bi-Encoder: Векторизация всех чанков батчем и грубый отсев (Top-20).
     4. Cross-Encoder: Точная перепроверка пар "Запрос-Чанк" (Reranking -> Top-3).
     """
-    searx_url = "http://localhost:666/search"
     
-    # --- Шаг 1: Получение ссылок ---
+    # --- Шаг 1: Поиск и скрейпинг через Firecrawl ---
     try:
-        params = {
-            'q': query, 
-            'format': 'json', 
-            'language': 'all', # Явно просим ВСЕ языки
-            'safesearch': 0,
+        search_url = f"{FIRECRAWL_BASE_URL}/v1/search"
+        headers = {
+            "Authorization": f"Bearer {FIRECRAWL_API_KEY}",
+            "Content-Type": "application/json"
         }
-        resp = requests.get(searx_url, params=params, timeout=30)
+        payload = {
+            "query": query,
+            "searchOptions": {
+                "limit": MAX_SEARCH_RESULTS
+            },
+            "scrapeOptions": {
+                "formats": ["markdown"]
+            }
+        }
+        
+        resp = requests.post(search_url, json=payload, headers=headers, timeout=60)
         resp.raise_for_status()
         data = resp.json()
         
-        unresponsive = data.get('unresponsive_engines', [])
-        if unresponsive:
-            logger.warning("SearXNG unresponsive engines for query '%s': %s", query, unresponsive)
+        if not data.get("success"):
+            error_msg = data.get("error", "Unknown Firecrawl error")
+            logger.error(f"Firecrawl search failed: {error_msg}")
+            return f"Ошибка поиска: {error_msg}"
 
-        # Берем чуть больше ссылок, так как у нас теперь мощный фильтр
-        raw_results = data.get('results', [])[:MAX_SEARCH_RESULTS] 
+        raw_results = data.get('data', [])
 
         if not raw_results:
-            logger.info("Search query '%s' returned 0 results from SearXNG", query)
-            if unresponsive:
-                error_msg = f"Поисковые системы временно недоступны или заблокированы: {', '.join([e[0] for e in unresponsive])}."
-                return error_msg
+            logger.info("Search query '%s' returned 0 results from Firecrawl", query)
             return "По вашему запросу ничего не найдено."
 
-        logger.info("SearXNG returned %d raw results for query '%s'", len(raw_results), query)
+        logger.info("Firecrawl returned %d search results for query '%s'", len(raw_results), query)
 
     except Exception as e:
-        logger.exception("intelligent_web_search error: %s", e)
+        logger.exception("intelligent_web_search error during Firecrawl search: %s", e)
         return f"Ошибка поискового движка: {e}"
 
-    # --- Шаг 2: Параллельный процессинг ---
+    # --- Шаг 2: Нарезка на чанки ---
     all_chunks = []
-    
-    # 5 потоков обычно достаточно для текстовых страниц, не перегружая сеть
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-        future_to_url = {
-            executor.submit(fetch_and_process_url, res.get('url'), res.get('title'), text_splitter): res 
-            for res in raw_results
-        }
+    for res in raw_results:
+        url = res.get('url')
+        title = res.get('title', 'No Title')
+        markdown = res.get('markdown', '')
         
-        for future in concurrent.futures.as_completed(future_to_url):
-            try:
-                result = future.result()
-                if result:
-                    all_chunks.extend(result)
-            except Exception as e:
-                logger.error(f"Error getting result from thread: {e}")
+        if not markdown:
+            # Если markdown пустой, пробуем использовать описание (snippet) если оно есть
+            markdown = res.get('description', '')
+            
+        if not markdown:
+            continue
+            
+        # Нарезка
+        raw_chunks = text_splitter.split_text(markdown)
+        for chunk in raw_chunks:
+            chunk = chunk.strip()
+            if len(chunk) < 10: continue
+            all_chunks.append({
+                'text': chunk,
+                'title': title,
+                'url': url
+            })
 
     if not all_chunks:
-        logger.warning("Failed to extract any content from %d URLs for query '%s'", len(raw_results), query)
-        return "Не удалось извлечь контент из найденных страниц (возможно, защита от ботов или пустые страницы)."
+        logger.warning("Failed to extract any content from Firecrawl results for query '%s'", query)
+        return "Не удалось извлечь контент из найденных страниц."
 
-    logger.info("Extracted %d chunks from web pages for query '%s'", len(all_chunks), query)
-
-    # Лимит на обработку, чтобы CPU не умер на огромных статьях
-    # all_chunks = all_chunks[:300]
+    logger.info("Extracted %d chunks from Firecrawl results for query '%s'", len(all_chunks), query)
 
     # --- Шаг 3: Bi-Encoder (Грубая фильтрация) ---
     # Батчевая векторизация текстов

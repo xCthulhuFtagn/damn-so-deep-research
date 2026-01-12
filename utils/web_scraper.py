@@ -5,18 +5,13 @@ import threading
 from urllib.parse import urlparse
 from typing import List, Dict, Any
 
-from config import MIN_CHUNK_LEN_TO_MERGE
+from config import MIN_CHUNK_LEN_TO_MERGE, FIRECRAWL_BASE_URL, FIRECRAWL_API_KEY
 
 logger = logging.getLogger(__name__)
 
-# Trafilatura (lxml) can sometimes have issues with concurrency in certain environments.
-# A global lock for extraction can prevent double-free or memory corruption issues.
-extraction_lock = threading.Lock()
-
 def fetch_and_process_url(url: str, title: str, text_splitter) -> List[Dict[str, Any]]:
     """
-    Скачивает URL, чистит, нарезает и склеивает "огрызки" текста.
-    Запускается в отдельном потоке.
+    Скачивает URL через Firecrawl, нарезает и склеивает "огрызки" текста.
     """
     domain = urlparse(url).netloc.lower()
     blocked_domains = ['youtube.com', 'bilibili.com', 'weibo.com', 'twitter.com', 'instagram.com']
@@ -28,41 +23,34 @@ def fetch_and_process_url(url: str, title: str, text_splitter) -> List[Dict[str,
         return []
 
     try:
-        # 1. Скачивание (requests with timeout to avoid hanging)
-        try:
-            resp = requests.get(url, timeout=10, headers={'User-Agent': 'Mozilla/5.0 (compatible; ResearchBot/1.0)'})
-            resp.raise_for_status()
-            
-            # Check content type to avoid downloading binaries
-            content_type = resp.headers.get('Content-Type', '').lower()
-            if 'text/html' not in content_type and 'text/plain' not in content_type:
-                return []
-                
-            downloaded = resp.text
-        except Exception as e:
-            logger.debug(f"Failed to fetch {url}: {e}")
+        # 1. Скачивание через Firecrawl
+        scrape_url = f"{FIRECRAWL_BASE_URL}/v1/scrape"
+        headers = {
+            "Authorization": f"Bearer {FIRECRAWL_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "url": url,
+            "formats": ["markdown"]
+        }
+        
+        resp = requests.post(scrape_url, json=payload, headers=headers, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        
+        if not data.get("success"):
+            logger.warning(f"Firecrawl failed to scrape {url}: {data.get('error')}")
             return []
-
-        # 2. Экстракция чистого текста
-        with extraction_lock:
-            try:
-                clean_text = trafilatura.extract(
-                    downloaded, 
-                    include_comments=False, 
-                    include_tables=False, 
-                    include_formatting=False
-                )
-            except Exception as e:
-                logger.error(f"Trafilatura extraction failed for {url}: {e}")
-                return []
-                
+            
+        clean_text = data.get("data", {}).get("markdown", "")
+        
         if not clean_text:
             return []
 
-        # 3. Умная нарезка (LangChain)
+        # 2. Умная нарезка (LangChain)
         raw_chunks = text_splitter.split_text(clean_text)
         
-        # 4. Логика "Smart Merge" (спасение маленьких чанков)
+        # 3. Логика "Smart Merge" (спасение маленьких чанков)
         merged_chunks = []
         min_chunk_len = MIN_CHUNK_LEN_TO_MERGE # Если меньше этого, пытаемся приклеить к предыдущему
         
@@ -98,5 +86,5 @@ def fetch_and_process_url(url: str, title: str, text_splitter) -> List[Dict[str,
         return processed_chunks
 
     except Exception as e:
-        logger.warning(f"Error processing {url}: {e}")
+        logger.warning(f"Error processing {url} via Firecrawl: {e}")
         return []

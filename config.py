@@ -27,6 +27,10 @@ MAX_CHUNK_SIZE = int(os.getenv("MAX_CHUNK_SIZE", 500))
 MIN_CHUNK_LEN_TO_MERGE = int(os.getenv("MIN_CHUNK_LEN_TO_MERGE", 100))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", 150))
 
+# Firecrawl settings
+FIRECRAWL_BASE_URL = os.getenv("FIRECRAWL_BASE_URL", "http://localhost:3002")
+FIRECRAWL_API_KEY = os.getenv("FIRECRAWL_API_KEY", "dummy_token")
+
 # Путь к базе данных
 BASE_DIR = Path("db")
 DB_PATH = str(BASE_DIR / DB_NAME)

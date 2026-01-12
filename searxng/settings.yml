@@ -15,6 +15,29 @@ server:
 outgoing:
   request_timeout: 20.0
   connect_timeout: 20.0
+  proxies:
+    http:
+      - http://user354025:qr0zet@102.129.221.253:5217
+      - http://user354025:qr0zet@181.215.71.126:5217
+      - http://user354025:qr0zet@77.83.195.196:5217
+      - http://user354025:qr0zet@181.215.71.233:5217
+      - http://user354025:qr0zet@102.129.221.248:5217
+      - http://user354025:qr0zet@140.99.236.73:5217
+      - http://user354025:qr0zet@146.103.19.83:5217
+      - http://user354025:qr0zet@23.94.132.38:5217
+      - http://user354025:qr0zet@23.94.132.83:5217
+      - http://user354025:qr0zet@23.94.132.88:5217
+    https:
+      - http://user354025:qr0zet@102.129.221.253:5217
+      - http://user354025:qr0zet@181.215.71.126:5217
+      - http://user354025:qr0zet@77.83.195.196:5217
+      - http://user354025:qr0zet@181.215.71.233:5217
+      - http://user354025:qr0zet@102.129.221.248:5217
+      - http://user354025:qr0zet@140.99.236.73:5217
+      - http://user354025:qr0zet@146.103.19.83:5217
+      - http://user354025:qr0zet@23.94.132.38:5217
+      - http://user354025:qr0zet@23.94.132.83:5217
+      - http://user354025:qr0zet@23.94.132.88:5217
 
 engines:
   - name: wikipedia
