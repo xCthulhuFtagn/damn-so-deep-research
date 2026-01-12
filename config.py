@@ -7,6 +7,12 @@ from dotenv import load_dotenv
 env_path = Path('.') / '.env'
 load_dotenv(dotenv_path=env_path)
 
+# Fix for httpx proxy scheme validation (httpx doesn't support 'socks://', only 'socks5://')
+for key in ['ALL_PROXY', 'all_proxy']:
+    val = os.getenv(key)
+    if val and val.startswith('socks://'):
+        os.environ[key] = val.replace('socks://', 'socks5://', 1)
+
 # Logging
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 LOG_FILE = os.getenv("LOG_FILE")  # optional

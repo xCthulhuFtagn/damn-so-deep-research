@@ -106,7 +106,18 @@ class SwarmRunner:
                         _execute_phase(run_id, current_agent, step_input, session, max_turns, run_config)
                     except Exception as e:
                         logger.error(f"Step {next_step['step_number']} for run {run_id} failed: {e}")
-                        db_service.update_step_status(next_step['id'], "FAILED", f"System Error: {e}")
+                        
+                        # Fix: Ensure we mark the ACTUALLY failed step, not the stale next_step from loop start
+                        failed_step_id = next_step['id']
+                        active_task_num = db_service.get_active_task(run_id)
+                        if active_task_num and active_task_num != next_step['step_number']:
+                            logger.warning(f"Run {run_id}: Error occurred in step {active_task_num}, but loop was at {next_step['step_number']}. Finding correct step ID.")
+                            plan_df = db_service.get_all_plan(run_id)
+                            row = plan_df[plan_df['step_number'] == active_task_num]
+                            if not row.empty:
+                                failed_step_id = int(row.iloc[0]['id'])
+                        
+                        db_service.update_step_status(failed_step_id, "FAILED", f"System Error: {e}")
                 
                 if db_service.should_pause(run_id):
                     logger.info("Pause signal received during/after Phase 2 for run %s", run_id)
@@ -148,25 +159,29 @@ def _execute_phase(run_id: str, agent: Agent, input_text: str, session: DBSessio
             Runner.run_sync(agent, input=current_input, session=session, max_turns=max_turns, run_config=run_config)
             
             # Strict tool enforcement: Check last assistant message
-            # Only enforce for non-Reporter agents
-            if agent.name not in ["Reporter", "Planner"]:
-                messages = db_service.load_messages(run_id)
-                # Find the last assistant message for this session
-                last_assistant = None
-                for msg in reversed(messages):
-                    if msg.role == "assistant" and msg.session_id == session.session_id:
-                        last_assistant = msg
-                        break
+            messages = db_service.load_messages(run_id)
+            # Find the last assistant message for this session
+            last_assistant = None
+            for msg in reversed(messages):
+                if msg.role == "assistant" and msg.session_id == session.session_id:
+                    last_assistant = msg
+                    break
+            
+            if last_assistant:
+                # Use sender if available (more accurate for handoffs), otherwise fallback to agent.name
+                effective_agent_name = last_assistant.sender or agent.name
                 
-                if last_assistant:
+                # Only enforce for non-Reporter/Planner/Evaluator agents
+                if effective_agent_name not in ["Reporter", "Planner", "Evaluator"]:
                     has_content = last_assistant.content and last_assistant.content.strip()
                     has_tool_calls = last_assistant.tool_calls and len(last_assistant.tool_calls) > 0
                     
                     # Violation: Has content but no tool calls
                     if has_content and not has_tool_calls:
-                        error_msg = f"Strict mode violation: Agent {agent.name} output text without calling a tool. Text: {last_assistant.content[:200]}"
+                        error_msg = f"Strict mode violation: Agent {effective_agent_name} output text without calling a tool. Text: {last_assistant.content[:200]}"
                         logger.warning(error_msg)
                         raise ModelBehaviorError(error_msg)
+
             
             return
         except (ModelBehaviorError, BadRequestError) as e:
