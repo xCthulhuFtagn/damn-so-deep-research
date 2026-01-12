@@ -203,10 +203,7 @@ else:
                 avatar = "🧠"
             else:
                 avatar = None
-                
-            if msg.sender is None and not msg.content:
-                continue
-            
+
             with st.chat_message(msg.role, avatar=avatar):
                 if msg.role == "user":
                     if is_automated:
