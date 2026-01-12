@@ -30,9 +30,7 @@ def intelligent_web_search(query: str) -> str:
         }
         payload = {
             "query": query,
-            "searchOptions": {
-                "limit": MAX_SEARCH_RESULTS
-            },
+            "limit": MAX_SEARCH_RESULTS,
             "scrapeOptions": {
                 "formats": ["markdown"]
             }
