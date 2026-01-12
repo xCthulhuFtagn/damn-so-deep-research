@@ -26,6 +26,7 @@ MAX_FINAL_TOP_CHUNKS = int(os.getenv("MAX_FINAL_TOP_CHUNKS", 3))
 MAX_CHUNK_SIZE = int(os.getenv("MAX_CHUNK_SIZE", 500))
 MIN_CHUNK_LEN_TO_MERGE = int(os.getenv("MIN_CHUNK_LEN_TO_MERGE", 100))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", 150))
+DEFAULT_TIMEOUT = int(os.getenv("DEFAULT_TIMEOUT", 120)) # Тайм-аут для внешних запросов
 
 # Firecrawl settings
 FIRECRAWL_BASE_URL = os.getenv("FIRECRAWL_BASE_URL", "http://localhost:3002")

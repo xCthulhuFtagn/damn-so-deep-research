@@ -5,7 +5,7 @@ import threading
 from urllib.parse import urlparse
 from typing import List, Dict, Any
 
-from config import MIN_CHUNK_LEN_TO_MERGE, FIRECRAWL_BASE_URL, FIRECRAWL_API_KEY
+from config import MIN_CHUNK_LEN_TO_MERGE, FIRECRAWL_BASE_URL, FIRECRAWL_API_KEY, DEFAULT_TIMEOUT
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ def fetch_and_process_url(url: str, title: str, text_splitter) -> List[Dict[str,
             "formats": ["markdown"]
         }
         
-        resp = requests.post(scrape_url, json=payload, headers=headers, timeout=30)
+        resp = requests.post(scrape_url, json=payload, headers=headers, timeout=DEFAULT_TIMEOUT)
         resp.raise_for_status()
         data = resp.json()
         

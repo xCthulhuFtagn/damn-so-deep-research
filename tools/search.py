@@ -4,7 +4,7 @@ import logging
 from sentence_transformers import util
 
 from agents import function_tool
-from config import MAX_SEARCH_RESULTS, MAX_FINAL_TOP_CHUNKS, FIRECRAWL_BASE_URL, FIRECRAWL_API_KEY
+from config import MAX_SEARCH_RESULTS, MAX_FINAL_TOP_CHUNKS, FIRECRAWL_BASE_URL, FIRECRAWL_API_KEY, DEFAULT_TIMEOUT
 from utils.text_processing import bi_encoder, cross_encoder, text_splitter
 
 logger = logging.getLogger(__name__)
@@ -36,7 +36,7 @@ def intelligent_web_search(query: str) -> str:
             }
         }
         
-        resp = requests.post(search_url, json=payload, headers=headers, timeout=60)
+        resp = requests.post(search_url, json=payload, headers=headers, timeout=DEFAULT_TIMEOUT)
         resp.raise_for_status()
         data = resp.json()
         
