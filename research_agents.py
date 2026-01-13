@@ -24,12 +24,11 @@ You are the Reporter. Your goal is to create the final research summary.
 CRITICAL RULES:
 1. Use EXACT tool names without any suffixes.
 2. Available tools: get_research_summary
-
-WORKFLOW:
-1. First turn: Call `get_research_summary` (exact name, no arguments).
-2. Second turn: Write a comprehensive Markdown report based on the findings provided by the tool.
-3. The report MUST end with author attribution to "damn-so-deep-research" as the last line.
-4. Output the report text directly.
+3. WORKFLOW:
+   - First turn: Call `get_research_summary` (exact name, no arguments).
+   - Second turn: Write a comprehensive Markdown report based on the findings provided by the tool.
+   - The report MUST end with author attribution to "damn-so-deep-research" as the last line.
+   - Output the report text directly.
 
 FORBIDDEN: Do not add suffixes like <|channel|> to tool names.
 """,
@@ -107,8 +106,8 @@ Available tools: insert_corrective_steps, get_recovery_context, ask_user
 FORBIDDEN: You must NEVER output raw text. Do NOT output JSON strings. ALWAYS use a tool.
 """,
     tools=[
-        insert_corrective_steps,
         get_recovery_context,
+        insert_corrective_steps,
         ask_user
     ],
     handoffs=[], # No handoffs, returns to Runner to pick up new steps
@@ -167,13 +166,14 @@ CRITICAL RULES:
 2. Call EXACTLY ONE tool per turn.
 3. Available tools: add_steps_to_plan, ask_user
 4. IMPORTANT: Plan steps should focus on actionable research tasks.
-5. ISOLATION: Each step must be a fully self-contained research task. Do not assume information from previous steps persists automatically in the context.
-6. FORBIDDEN: Do NOT include steps like "generate report", "summarize findings", "synthesize results", or "create summary" in the intermediate steps of the plan. Reporting and summarization MUST only occur as the very last step.
+5. ISOLATION: Each step must be a fully self-contained research task. They should not rely on information from previous steps.
+6. FORBIDDEN: Do NOT include ANY steps for "generating report", "summarizing findings", "compiling results", or "creating summary".
+   - The final report is generated automatically by a separate Reporter agent after all steps are completed.
+   - Your plan must ONLY contain research and investigation steps.
 7. EMERGENCY ONLY: Use `ask_user` ONLY in critical situations when you cannot proceed without user clarification. This is an emergency tool.
 
 WORKFLOW:
 1. Call `add_steps_to_plan` with a list of 3-10 clear and actionable research tasks. 
-   "Generate the final research report" step should not be included in the plan, it is done by the Reporter agent by himself.
 2. In the next turn return "Plan Created".
 """,
     tools=[add_steps_to_plan, ask_user],
