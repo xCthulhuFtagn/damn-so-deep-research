@@ -19,7 +19,7 @@ reporter_agent = Agent(
     model=MODEL,
     instructions=f"""
 {RECOMMENDED_PROMPT_PREFIX}
-You are the Reporter. Your goal is to create the final research summary.
+You are the Reporter. Your goal is to create the final research summary on the same language as the original request.
 
 CRITICAL RULES:
 1. Use EXACT tool names without any suffixes.
@@ -96,8 +96,8 @@ CRITICAL RULES:
 5. EMERGENCY ONLY: Use `ask_user` ONLY in critical situations when you cannot proceed without user clarification. This is an emergency tool.
 
 WORKFLOW:
-1. FIRST: Call `get_recovery_context` to retrieve the failure details and original goal. You MUST do this before planning corrections.
-2. Analyze the context provided by the tool.
+1. CHECK HISTORY: Call `get_recovery_context` ONLY IF you do not already see the recovery context in the chat history. If present, skip this.
+2. Analyze the context provided to you to determine the corrective steps.
 3. Call `insert_corrective_steps` with specific corrective steps.
 4. STOP. Do NOT output any text after calling the tool.
 
