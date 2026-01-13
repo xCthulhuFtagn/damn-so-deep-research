@@ -113,11 +113,11 @@ FORBIDDEN: You must NEVER output raw text. Do NOT output JSON strings. ALWAYS us
         ask_user
     ],
     handoffs=[], # No handoffs, returns to Runner to pick up new steps
+    tool_use_behavior=StopAtTools(stop_at_tool_names=["insert_corrective_steps"]),
     model_settings=ModelSettings(
         temperature=0.0,
         parallel_tool_calls=False, 
-        tool_choice="required",
-        tool_use_behavior=StopAtTools(stop_at_tool_names=["insert_corrective_steps"])
+        tool_choice="required"
     )
 )
 
@@ -151,11 +151,11 @@ FORBIDDEN: You must NEVER output raw text. Do NOT output JSON strings. ALWAYS us
         mark_step_failed,
     ],
     handoffs=[handoff(strategist_agent)],
+    tool_use_behavior=StopAtTools(stop_at_tool_names=["submit_step_result"]),
     model_settings=ModelSettings(
         temperature=0.0,
         parallel_tool_calls=False, 
-        tool_choice="required",
-        tool_use_behavior=StopAtTools(stop_at_tool_names=["submit_step_result"])
+        tool_choice="required"
     )
 )
 
@@ -182,11 +182,11 @@ WORKFLOW: Call `add_steps_to_plan` with a list of 3-10 clear and actionable rese
 """,
     tools=[add_steps_to_plan, ask_user],
     handoffs=[], # No handoffs, returns to Runner
+    tool_use_behavior=StopAtTools(stop_at_tool_names=["add_steps_to_plan"]),
     model_settings=ModelSettings(
         temperature=0.0,
         parallel_tool_calls=False,
-        tool_choice="required",
-        tool_use_behavior=StopAtTools(stop_at_tool_names=["add_steps_to_plan"])
+        tool_choice="required"
     )
 )
 
