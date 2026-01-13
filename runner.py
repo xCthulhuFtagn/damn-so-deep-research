@@ -1,6 +1,7 @@
 import threading
 import logging
 import time
+import re
 from typing import Optional, Dict
 
 from agents import Runner, Agent, RunConfig, ModelSettings
@@ -27,6 +28,23 @@ class VLLMChatCompletionsProvider(ModelProvider):
         
         async def tracking_create(*args, **kwargs):
             response = await original_create(*args, **kwargs)
+            
+            # Sanitize tool calls to fix <|channel|>commentary suffix issue
+            try:
+                if response and response.choices:
+                    for choice in response.choices:
+                        if choice.message and choice.message.tool_calls:
+                            for tool_call in choice.message.tool_calls:
+                                if tool_call.function and tool_call.function.name:
+                                    original_name = tool_call.function.name
+                                    # Strip <|channel|> and anything after
+                                    if "<|channel|>" in original_name:
+                                        clean_name = original_name.split("<|channel|>")[0]
+                                        logger.warning(f"Sanitizing tool name: '{original_name}' -> '{clean_name}'")
+                                        tool_call.function.name = clean_name
+            except Exception as e:
+                logger.error(f"Failed to sanitize tool calls: {e}")
+
             try:
                 if response and response.usage:
                     run_id = current_run_id.get()

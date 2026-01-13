@@ -118,7 +118,7 @@ class DBSession(Session):
                 elif item_type == "function" or item_type == "tool_call_item":
                     # Standalone tool call items are redundant as they are already included 
                     # in the assistant message's tool_calls list.
-                    logger.debug("DBSession: Skipping redundant tool call item. Type: %s", item_type)
+                    # logger.debug("DBSession: Skipping redundant tool call item. Type: %s", item_type)
                     continue
                 else: role = "system"
 
@@ -145,7 +145,7 @@ class DBSession(Session):
 
             # Filter out empty system messages which are often side-effects of unhandled item types
             if role == "system" and not content and not tool_calls:
-                logger.debug("DBSession: Skipping empty system message. Raw item type: %s", type(item))
+                # logger.debug("DBSession: Skipping empty system message. Raw item type: %s", type(item))
                 continue
 
             db_service.save_message(

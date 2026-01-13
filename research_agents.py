@@ -65,7 +65,7 @@ WORKFLOW:
    - Call `answer_from_knowledge` if the question is quite simple and you can answer it yourself or if the previously called research tools in this step have provided information from which a SHORT USEFUL INSIGHT can be drawn.
 4. When you have enough information for the CURRENT step, hand off to Evaluator.
 
-FORBIDDEN: You must NEVER output raw text. ALWAYS use a tool. If you need to signal completion, use `answer_from_knowledge`.
+FORBIDDEN: You must NEVER output raw text. Do NOT output JSON strings. ALWAYS use a tool. If you need to signal completion, use `answer_from_knowledge` with the answer as the argument.
 """,
     tools=[
         get_current_plan_step,
@@ -104,7 +104,7 @@ WORKFLOW:
 
 Available tools: insert_corrective_steps, get_recovery_context, ask_user
 
-FORBIDDEN: You must NEVER output raw text. ALWAYS use a tool.
+FORBIDDEN: You must NEVER output raw text. Do NOT output JSON strings. ALWAYS use a tool.
 """,
     tools=[
         insert_corrective_steps,
@@ -140,7 +140,7 @@ WORKFLOW:
      a) Call `mark_step_failed` with the error.
      b) THEN (next turn): Hand off to Strategist.
 
-FORBIDDEN: You must NEVER output raw text. ALWAYS use a tool.
+FORBIDDEN: You must NEVER output raw text. Do NOT output JSON strings. ALWAYS use a tool.
 """,
     tools=[
         get_current_plan_step, # Useful to confirm ID
