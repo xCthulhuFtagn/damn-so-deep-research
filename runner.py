@@ -200,6 +200,12 @@ def _execute_phase(run_id: str, agent: Agent, input_text: str, session: DBSessio
                     has_content = last_assistant.content and last_assistant.content.strip()
                     has_tool_calls = last_assistant.tool_calls and len(last_assistant.tool_calls) > 0
                     
+                    # # Violation: No content and no tool calls
+                    # if not has_content and not has_tool_calls:
+                    #     error_msg = f"Strict mode violation: Agent {effective_agent_name} returned an empty response. It MUST call a tool."
+                    #     logger.warning(error_msg)
+                    #     raise ModelBehaviorError(error_msg)
+
                     # Violation: Has content but no tool calls
                     if has_content and not has_tool_calls:
                         # CHECK EXCEPTION: If the previous assistant message was a valid completion tool, ignore this chatter.

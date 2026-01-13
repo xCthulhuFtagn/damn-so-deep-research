@@ -25,10 +25,19 @@ def submit_step_result(step_id: int, result_text: str) -> str:
     if not run_id:
         return "Error: No active run context."
         
-    logger.info("submit_step_result: run_id=%s step_id=%s result_chars=%s", run_id, step_id, len(result_text or ""))
-    db_service.update_step_status(step_id, "DONE", result_text)
+    # Пытаемся автоматически определить корректный ID активного шага
+    active_step_num = db_service.get_active_task(run_id)
+    actual_id = step_id
+    if active_step_num is not None:
+        resolved_id = db_service.get_step_id_by_number(run_id, active_step_num)
+        if resolved_id and actual_id != resolved_id:
+            logger.warning(f"submit_step_result: Mismatch fixed. Provided ID {step_id}, using active ID {resolved_id}")
+            actual_id = resolved_id
+
+    logger.info("submit_step_result: run_id=%s step_id=%s result_chars=%s", run_id, actual_id, len(result_text or ""))
+    db_service.update_step_status(actual_id, "DONE", result_text)
     db_service.set_active_task(run_id, None)
-    return "Result saved to Database. Step marked as DONE."
+    return f"Result saved to Database. Step {active_step_num or ''} (ID {actual_id}) marked as DONE."
 
 @function_tool
 def mark_step_failed(step_id: int, error_msg: str) -> str:
@@ -39,9 +48,17 @@ def mark_step_failed(step_id: int, error_msg: str) -> str:
     if not run_id:
         return "Error: No active run context."
         
-    logger.warning("mark_step_failed: run_id=%s step_id=%s error_chars=%s", run_id, step_id, len(error_msg or ""))
-    db_service.update_step_status(step_id, "FAILED", error_msg)
-    return "Step marked as FAILED."
+    active_step_num = db_service.get_active_task(run_id)
+    actual_id = step_id
+    if active_step_num is not None:
+        resolved_id = db_service.get_step_id_by_number(run_id, active_step_num)
+        if resolved_id and actual_id != resolved_id:
+            logger.warning(f"mark_step_failed: Mismatch fixed. Provided ID {step_id}, using active ID {resolved_id}")
+            actual_id = resolved_id
+
+    logger.warning("mark_step_failed: run_id=%s step_id=%s error_chars=%s", run_id, actual_id, len(error_msg or ""))
+    db_service.update_step_status(actual_id, "FAILED", error_msg)
+    return f"Step {active_step_num or ''} (ID {actual_id}) marked as FAILED."
 
 @function_tool
 def get_recovery_context() -> str:

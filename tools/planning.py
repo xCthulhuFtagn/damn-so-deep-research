@@ -106,13 +106,3 @@ def insert_corrective_steps(steps: List[str]) -> str:
     except Exception as e:
         logger.error(f"Failed to insert steps for run {run_id}: {e}")
         return f"SYSTEM ERROR during database update: {e}"
-    
-    if not steps_list:
-        return "ERROR: No valid text provided for steps."
-
-    try:
-        db_service.insert_plan_steps_atomic(run_id, steps_list, insert_after_step=active_task_num)
-        return f"SUCCESS: Inserted {len(steps_list)} corrective steps after Step {active_task_num} for run {run_id}."
-    except Exception as e:
-        logger.error(f"Failed to insert steps for run {run_id}: {e}")
-        return f"SYSTEM ERROR during database update: {e}"

@@ -236,6 +236,12 @@ class DatabaseService:
             row = conn.execute("SELECT COALESCE(MAX(step_number), 0) FROM plan WHERE run_id = ?", (run_id,)).fetchone()
         return int(row[0]) if row and row[0] is not None else 0
         
+    def get_step_id_by_number(self, run_id: str, step_number: int) -> Optional[int]:
+        """Возвращает первичный ключ (id) шага по его порядковому номеру."""
+        with self.get_connection() as conn:
+            row = conn.execute("SELECT id FROM plan WHERE run_id = ? AND step_number = ?", (run_id, step_number)).fetchone()
+        return row["id"] if row else None
+
     def get_existing_step_numbers(self, run_id: str) -> set[int]:
         with self.get_connection() as conn:
             rows = conn.execute("SELECT step_number FROM plan WHERE run_id = ?", (run_id,)).fetchall()

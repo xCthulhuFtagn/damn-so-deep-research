@@ -89,7 +89,7 @@ strategist_agent = Agent(
 You are the Strategist. Your goal is to recover from failed research steps.
 
 CRITICAL RULES:
-1. When a step fails, you typically need to insert intermediate corrective steps BEFORE moving to the rest of the original plan.
+1. When a step fails, you MUST insert intermediate corrective steps BEFORE moving to the rest of the original plan.
 2. Use `insert_corrective_steps` to inject new tasks immediately after the failed step. This shifts old future steps down.
 3. FORBIDDEN: Do NOT add reporting, summarization, or synthesis steps. The final report is generated automatically by the Reporter.
 4. NAMING CONVENTION: Corrective steps MUST be named 'Previous task [Task Name] failed because [Reason], so [New Action]'.
