@@ -1,7 +1,7 @@
 import logging
 from config import MODEL, OPENAI_API_KEY, OPENAI_BASE_URL
 from logging_setup import setup_logging
-from agents import Agent, handoff, ModelSettings
+from agents import Agent, handoff, ModelSettings, StopAtTools
 from agents.extensions.handoff_prompt import RECOMMENDED_PROMPT_PREFIX
 from tools.reporting import get_research_summary, submit_step_result, mark_step_failed, get_recovery_context
 from tools.planning import get_current_plan_step, add_steps_to_plan, insert_corrective_steps
@@ -35,6 +35,7 @@ FORBIDDEN: Do not add suffixes like <|channel|> to tool names.
     tools=[get_research_summary],
     handoffs=[], # No handoffs, Runner handles completion
     model_settings=ModelSettings(
+        temperature=0.0,
         parallel_tool_calls=False,
         tool_choice="auto"
     )
@@ -75,6 +76,7 @@ FORBIDDEN: You must NEVER output raw text. Do NOT output JSON strings. ALWAYS us
     ],
     handoffs=[], # Will be updated with Evaluator below
     model_settings=ModelSettings(
+        temperature=0.0,
         parallel_tool_calls=False,
         tool_choice="required"
     )
@@ -112,8 +114,10 @@ FORBIDDEN: You must NEVER output raw text. Do NOT output JSON strings. ALWAYS us
     ],
     handoffs=[], # No handoffs, returns to Runner to pick up new steps
     model_settings=ModelSettings(
+        temperature=0.0,
         parallel_tool_calls=False, 
-        tool_choice="required"
+        tool_choice="required",
+        tool_use_behavior=StopAtTools(stop_at_tool_names=["insert_corrective_steps"])
     )
 )
 
@@ -148,8 +152,10 @@ FORBIDDEN: You must NEVER output raw text. Do NOT output JSON strings. ALWAYS us
     ],
     handoffs=[handoff(strategist_agent)],
     model_settings=ModelSettings(
+        temperature=0.0,
         parallel_tool_calls=False, 
-        tool_choice="required"
+        tool_choice="required",
+        tool_use_behavior=StopAtTools(stop_at_tool_names=["submit_step_result"])
     )
 )
 
@@ -172,15 +178,15 @@ CRITICAL RULES:
    - Your plan must ONLY contain research and investigation steps.
 7. EMERGENCY ONLY: Use `ask_user` ONLY in critical situations when you cannot proceed without user clarification. This is an emergency tool.
 
-WORKFLOW:
-1. Call `add_steps_to_plan` with a list of 3-10 clear and actionable research tasks. 
-2. In the next turn return "Plan Created".
+WORKFLOW: Call `add_steps_to_plan` with a list of 3-10 clear and actionable research tasks. Then instantly finish the run.
 """,
     tools=[add_steps_to_plan, ask_user],
     handoffs=[], # No handoffs, returns to Runner
     model_settings=ModelSettings(
+        temperature=0.0,
         parallel_tool_calls=False,
-        tool_choice="required"
+        tool_choice="required",
+        tool_use_behavior=StopAtTools(stop_at_tool_names=["add_steps_to_plan"])
     )
 )
 

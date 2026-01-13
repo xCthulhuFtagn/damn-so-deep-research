@@ -89,7 +89,6 @@ class SwarmRunner:
                     api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL, default_model=MODEL
                 ),
                 tracing_disabled=True,
-                model_settings=ModelSettings(temperature=0.0, parallel_tool_calls=False, tool_choice="auto"),
             )
 
             current_agent = start_agent
