@@ -40,9 +40,14 @@ def submit_step_result(step_id: int, result_text: str) -> str:
     return f"Result saved to Database. Step {active_step_num or ''} (ID {actual_id}) marked as DONE."
 
 @function_tool
-def mark_step_failed(step_id: int, error_msg: str) -> str:
+def mark_step_failed(step_id: int, error_msg: str, is_important_failed_step: bool = True) -> str:
     """
     Помечает шаг как проваленный.
+    
+    Args:
+        step_id (int): ID шага.
+        error_msg (str): Сообщение об ошибке.
+        is_important_failed_step (bool): Является ли этот шаг критически важным для исследования.
     """
     run_id = current_run_id.get()
     if not run_id:
@@ -56,9 +61,40 @@ def mark_step_failed(step_id: int, error_msg: str) -> str:
             logger.warning(f"mark_step_failed: Mismatch fixed. Provided ID {step_id}, using active ID {resolved_id}")
             actual_id = resolved_id
 
-    logger.warning("mark_step_failed: run_id=%s step_id=%s error_chars=%s", run_id, actual_id, len(error_msg or ""))
-    db_service.update_step_status(actual_id, "FAILED", error_msg)
-    return f"Step {active_step_num or ''} (ID {actual_id}) marked as FAILED."
+    importance_prefix = "[CRITICAL] " if is_important_failed_step else "[NON-CRITICAL] "
+    full_error_msg = f"{importance_prefix}{error_msg}"
+    
+    logger.warning("mark_step_failed: run_id=%s step_id=%s error_chars=%s important=%s", 
+                   run_id, actual_id, len(error_msg or ""), is_important_failed_step)
+    db_service.update_step_status(actual_id, "FAILED", full_error_msg)
+    return f"Step {active_step_num or ''} (ID {actual_id}) marked as FAILED. Importance: {is_important_failed_step}."
+
+@function_tool
+def deem_step_unimportant(step_id: int, reason: str) -> str:
+    """
+    Помечает текущий шаг как неважный, если он завершился неудачно или безрезультатно, 
+    но это не мешает продолжению исследования. Это позволяет избежать корректирующих шагов.
+    
+    Args:
+        step_id (int): ID шага.
+        reason (str): Пояснение, почему этот шаг можно пропустить или считать несущественным.
+    """
+    run_id = current_run_id.get()
+    if not run_id:
+        return "Error: No active run context."
+        
+    active_step_num = db_service.get_active_task(run_id)
+    actual_id = step_id
+    if active_step_num is not None:
+        resolved_id = db_service.get_step_id_by_number(run_id, active_step_num)
+        if resolved_id and actual_id != resolved_id:
+            logger.warning(f"deem_step_unimportant: Mismatch fixed. Provided ID {step_id}, using active ID {resolved_id}")
+            actual_id = resolved_id
+
+    logger.info("deem_step_unimportant: run_id=%s step_id=%s reason=%s", run_id, actual_id, reason)
+    db_service.update_step_status(actual_id, "SKIPPED", f"Deemed unimportant: {reason}")
+    db_service.set_active_task(run_id, None)
+    return f"Step {active_step_num or ''} (ID {actual_id}) marked as SKIPPED because it's unimportant. Reason: {reason}"
 
 @function_tool
 def get_recovery_context() -> str:

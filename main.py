@@ -43,7 +43,14 @@ def get_display_messages(run_id):
     return display_messages
 
 def highlight_status(s):
-    return ['color: #2ECC71' if v == 'DONE' else 'color: #E74C3C' if v == 'FAILED' else 'color: #F1C40F' if v == 'TODO' else 'color: #3498DB' if v == 'IN_PROGRESS' else '' for v in s]
+    return [
+        'color: #2ECC71' if v == 'DONE' 
+        else 'color: #E74C3C' if v == 'FAILED' 
+        else 'color: #F1C40F' if v == 'TODO' 
+        else 'color: #3498DB' if v == 'IN_PROGRESS' 
+        else 'color: #95A5A6' if v == 'SKIPPED'
+        else '' for v in s
+    ]
 
 
 # --- Authentication ---

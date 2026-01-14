@@ -3,10 +3,10 @@ from config import MODEL, OPENAI_API_KEY, OPENAI_BASE_URL
 from logging_setup import setup_logging
 from agents import Agent, handoff, ModelSettings, StopAtTools
 from agents.extensions.handoff_prompt import RECOMMENDED_PROMPT_PREFIX
-from tools.reporting import get_research_summary, submit_step_result, mark_step_failed, get_recovery_context
+from tools.reporting import get_research_summary, submit_step_result, mark_step_failed, get_recovery_context, deem_step_unimportant
 from tools.planning import get_current_plan_step, add_steps_to_plan, insert_corrective_steps
 from tools.search import intelligent_web_search
-from tools.execution import read_file, execute_terminal_command, answer_from_knowledge, ask_user, ask_user
+from tools.execution import read_file, execute_terminal_command, answer_from_knowledge, ask_user
 
 setup_logging()
 logger = logging.getLogger(__name__)
@@ -131,27 +131,35 @@ You are the QA Evaluator. You validate research findings.
 
 CRITICAL RULES:
 1. Use EXACT tool names. Do NOT add suffixes like `<|channel|>` or `commentary`.
-2. Available tools: submit_step_result, mark_step_failed
+2. Available tools: get_research_summary, submit_step_result, mark_step_failed, deem_step_unimportant
 
 WORKFLOW:
-1. Analyze the latest tool outputs from Executor.
-2. DECISION:
-   - IF VALID: 
+1. PRE-DECISION: ALWAYS call `get_research_summary` first to see already collected information.
+2. Analyze the latest tool outputs from Executor in context of the whole research summary.
+3. DECISION:
+   - IF VALID/SUFFICIENT: 
      a) Call `submit_step_result` with the step_id and findings.
-     b) STOP. Do NOT output any text after this.
+     b) STOP.
    - IF FAILED/EMPTY: 
-     a) Call `mark_step_failed` with the error.
-     b) THEN (next turn): Hand off to Strategist.
+     a) Decide if this step is CRITICAL for the overall research goal.
+     b) IF CRITICAL:
+        - Call `mark_step_failed` with the error and `is_important_failed_step=True`.
+        - THEN (next turn): Hand off to Strategist.
+     c) IF NOT CRITICAL (e.g., info can be found elsewhere or is optional):
+        - Call `deem_step_unimportant` with the reason.
+        - STOP.
 
 FORBIDDEN: You must NEVER output raw text. Do NOT output JSON strings. ALWAYS use a tool.
 """,
     tools=[
         get_current_plan_step, # Useful to confirm ID
+        get_research_summary,
         submit_step_result,
         mark_step_failed,
+        deem_step_unimportant,
     ],
     handoffs=[handoff(strategist_agent)],
-    tool_use_behavior=StopAtTools(stop_at_tool_names=["submit_step_result"]),
+    tool_use_behavior=StopAtTools(stop_at_tool_names=["submit_step_result", "deem_step_unimportant"]),
     model_settings=ModelSettings(
         temperature=0.0,
         parallel_tool_calls=False, 
