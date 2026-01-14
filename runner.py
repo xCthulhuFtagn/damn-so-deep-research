@@ -13,10 +13,18 @@ from openai import AsyncOpenAI, BadRequestError
 from config import MAX_TURNS, OPENAI_API_KEY, OPENAI_BASE_URL, MAX_RETRIES, MODEL
 from database import db_service
 from db_session import DBSession
-from research_agents import get_agent_by_name, planner_agent, executor_agent, reporter_agent
+from research_agents import executor_agent, reporter_agent, evaluator_agent, strategist_agent, planner_agent
 from utils.context import current_run_id, current_user_id
 
 logger = logging.getLogger(__name__)
+
+AGENT_MAP = {
+    "Executor": executor_agent,
+    "Evaluator": evaluator_agent,
+    "Strategist": strategist_agent,
+    "Planner": planner_agent,
+    "Reporter": reporter_agent
+}
 
 class VLLMChatCompletionsProvider(ModelProvider):
     def __init__(self, base_url: str, api_key: str, default_model: str):
@@ -194,41 +202,16 @@ def _execute_phase(run_id: str, agent: Agent, input_text: str, session: DBSessio
                 # Use sender if available (more accurate for handoffs), otherwise fallback to agent.name
                 effective_agent_name = last_assistant.sender or agent.name
                 
-                # Only enforce for non-Reporter/Planner/Evaluator agents
-                if effective_agent_name not in ["Reporter", "Planner", "Evaluator"]:
+                # Only enforce for non-Reporter agents
+                if effective_agent_name != "Reporter":
                     has_content = last_assistant.content and last_assistant.content.strip()
                     has_tool_calls = last_assistant.tool_calls and len(last_assistant.tool_calls) > 0
                     
-                    # # Violation: No content and no tool calls
-                    # if not has_content and not has_tool_calls:
-                    #     error_msg = f"Strict mode violation: Agent {effective_agent_name} returned an empty response. It MUST call a tool."
-                    #     logger.warning(error_msg)
-                    #     raise ModelBehaviorError(error_msg)
-
                     # Violation: Has content but no tool calls
                     if has_content and not has_tool_calls:
-                        # CHECK EXCEPTION: If the previous assistant message was a valid completion tool, ignore this chatter.
-                        # We need to look back one more step in history, or check if ANY recent message was a completion.
-                        # Since we re-load messages, let's check the last few.
-                        is_completed = False
-                        for m in reversed(messages[-5:]): # Check last 5 messages
-                            if m.role == "assistant" and m.tool_calls:
-                                for tc in m.tool_calls:
-                                    if isinstance(tc, dict):
-                                        fname = tc.get('function', {}).get('name')
-                                        if fname in ["submit_step_result", "mark_step_failed", "insert_corrective_steps"]:
-                                            is_completed = True
-                                            break
-                            if is_completed: break
-                        
-                        if is_completed:
-                            logger.info(f"Ignoring strict mode violation for {effective_agent_name} because step is completed/failed.")
-                            return
-                            
                         error_msg = f"Strict mode violation: Agent {effective_agent_name} output text without calling a tool. Text: {last_assistant.content[:200]}"
                         logger.warning(error_msg)
                         raise ModelBehaviorError(error_msg)
-
             
             return
         except (ModelBehaviorError, BadRequestError) as e:
@@ -236,13 +219,31 @@ def _execute_phase(run_id: str, agent: Agent, input_text: str, session: DBSessio
             error_msg = str(e)
             short_error = error_msg[:500] + "..." if len(error_msg) > 500 else error_msg
             logger.warning("API/Model Error (attempt %s) for run %s: %s", retry_count, run_id, short_error)
+            
+            # RECOVERY: Try to find the last active agent to restart from
+            messages = db_service.load_messages(run_id)
+            for msg in reversed(messages):
+                if msg.role == "assistant" and msg.sender in AGENT_MAP:
+                    agent = AGENT_MAP[msg.sender]
+                    logger.info(f"Retrying with last active agent: {agent.name}")
+                    break
+            
             db_service.save_message(run_id, "system", f"System Feedback: {short_error}", session_id=session.session_id)
-            current_input = "[INTERNAL SYSTEM NOTIFICATION]: An error occurred. Please review the feedback and continue."
+            current_input = "[INTERNAL SYSTEM NOTIFICATION]: An error occurred. You were the last active agent. Please take into account the feedback and continue."
         except Exception as e:
             retry_count += 1
             err_msg = str(e)
             short_err = err_msg[:500] + "..." if len(err_msg) > 500 else err_msg
             logger.exception("Generic error in phase (attempt %s) for run %s: %s", retry_count, run_id, short_err)
+            
+            # RECOVERY: Try to find the last active agent to restart from
+            messages = db_service.load_messages(run_id)
+            for msg in reversed(messages):
+                if msg.role == "assistant" and msg.sender in AGENT_MAP:
+                    agent = AGENT_MAP[msg.sender]
+                    logger.info(f"Retrying with last active agent: {agent.name}")
+                    break
+
             db_service.save_message(run_id, "system", f"System Error: {short_err}", session_id=session.session_id)
             current_input = "[INTERNAL SYSTEM NOTIFICATION]: An internal error occurred. Please try to recover."
             time.sleep(2)

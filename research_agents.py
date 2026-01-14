@@ -194,22 +194,3 @@ WORKFLOW: Call `add_steps_to_plan` with a list of 3-10 clear and actionable rese
 # Close the circular dependency loop for Executor -> Evaluator
 # Also remove Reporter handoff from Executor (it was placeholder)
 executor_agent.handoffs = [handoff(evaluator_agent)]
-
-# --- Helper: resolve agent by name (for recovery logic) ---
-_AGENT_MAP = {
-    "Planner": planner_agent,
-    "Executor": executor_agent,
-    "Evaluator": evaluator_agent,
-    "Reporter": reporter_agent,
-    "Strategist": strategist_agent,
-}
-
-
-def get_agent_by_name(name: str):
-    """
-    Resolve agent object by its name (as stored in DB sender field or error text).
-    Returns None if not found.
-    """
-    if not name:
-        return None
-    return _AGENT_MAP.get(name)
