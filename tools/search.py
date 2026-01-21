@@ -4,8 +4,8 @@ import logging
 from sentence_transformers import util
 
 from agents import function_tool
-from config import MAX_SEARCH_RESULTS, MAX_FINAL_TOP_CHUNKS, FIRECRAWL_BASE_URL, FIRECRAWL_API_KEY, DEFAULT_TIMEOUT
-from utils.text_processing import bi_encoder, cross_encoder, text_splitter
+from config import MAX_SEARCH_RESULTS, MAX_FINAL_TOP_CHUNKS, FIRECRAWL_BASE_URL, FIRECRAWL_API_KEY, DEFAULT_TIMEOUT, config
+from utils.text_processing import model_manager
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +72,7 @@ def intelligent_web_search(query: str) -> str:
             continue
             
         # Нарезка
+        text_splitter = model_manager.get_text_splitter()
         raw_chunks = text_splitter.split_text(markdown)
         for chunk in raw_chunks:
             chunk = chunk.strip()
@@ -91,7 +92,10 @@ def intelligent_web_search(query: str) -> str:
     # --- Шаг 3: Bi-Encoder (Грубая фильтрация) ---
     # Батчевая векторизация текстов
     chunk_texts = [c['text'] for c in all_chunks]
-    
+
+    # Получаем bi-encoder (lazy loading)
+    bi_encoder = model_manager.get_bi_encoder()
+
     # Кодируем (convert_to_tensor=True для скорости в torch)
     query_embed = bi_encoder.encode(query, convert_to_tensor=True)
     corpus_embeds = bi_encoder.encode(chunk_texts, convert_to_tensor=True, show_progress_bar=False)
@@ -107,7 +111,7 @@ def intelligent_web_search(query: str) -> str:
     for score, idx in zip(top_results.values, top_results.indices):
         idx = idx.item()
         # Мягкий порог для Bi-Encoder (он часто занижает скоры)
-        if score.item() < 0.2: continue 
+        if score.item() < config.search.bi_encoder_threshold: continue 
         
         candidates.append(all_chunks[idx])
 
@@ -120,7 +124,10 @@ def intelligent_web_search(query: str) -> str:
     # --- Шаг 4: Cross-Encoder (Точный реранкинг) ---
     # Формируем пары [Query, Text]
     cross_inp = [[query, item['text']] for item in candidates]
-    
+
+    # Получаем cross-encoder (lazy loading)
+    cross_encoder = model_manager.get_cross_encoder()
+
     # Предсказание (возвращает список float scores)
     cross_scores = cross_encoder.predict(cross_inp)
     
@@ -149,7 +156,7 @@ def intelligent_web_search(query: str) -> str:
         item = entry['item']
         url = item['url']
 
-        if score < -1.0: # Порог для Cross-Encoder (MS Marco). < 0 обычно значит "не релевантно"
+        if score < config.search.cross_encoder_threshold: # Порог для Cross-Encoder (MS Marco). < 0 обычно значит "не релевантно"
             continue
 
         if url not in grouped_snippets:
