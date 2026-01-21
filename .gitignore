@@ -8,3 +8,4 @@ db/
 research.db
 research_state.db-wal
 research_state.db-shm
+*.db
