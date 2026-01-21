@@ -426,5 +426,11 @@ class DatabaseService:
     def get_approval_status_sync(self, run_id: str, command_hash: str) -> Optional[int]:
         return asyncio.run(self.get_approval_status(run_id, command_hash))
 
+    def request_approval_sync(self, run_id: str, command_hash: str, command_text: str):
+        return asyncio.run(self.request_approval(run_id, command_hash, command_text))
+
+    def should_pause_sync(self, run_id: str) -> bool:
+        return asyncio.run(self.should_pause(run_id))
+
 # Global instance for convenience
 db_service = DatabaseService()

@@ -210,6 +210,7 @@ else:
         for run in user_runs:
             if st.sidebar.button(f"📄 {run['title']}", key=run['id']):
                 st.session_state.active_run_id = run['id']
+                st.rerun()
 
     # --- Active Run View (Title and Content) ---
     if 'active_run_id' in st.session_state:
