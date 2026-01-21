@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 st.set_page_config(page_title="Deep Research Swarm", layout="wide")
 
 def get_display_messages(run_id):
-    messages = db_service.load_messages(run_id)
+    messages = db_service.load_messages_sync(run_id)
     display_messages = []
     tool_results = {msg.tool_call_id: msg.content for msg in messages if msg.role == 'tool'}
 
@@ -64,7 +64,7 @@ if 'user_id' not in st.session_state:
             password = st.text_input("Password", type="password")
             submitted = st.form_submit_button("Login")
             if submitted:
-                user_id = db_service.authenticate_user(username, password)
+                user_id = db_service.authenticate_user_sync(username, password)
                 if user_id:
                     st.session_state.user_id = user_id
                     st.session_state.username = username
@@ -78,7 +78,7 @@ if 'user_id' not in st.session_state:
             password = st.text_input("Password", type="password", key="reg_pass")
             submitted = st.form_submit_button("Register")
             if submitted:
-                user_id = db_service.register_user(username, password)
+                user_id = db_service.register_user_sync(username, password)
                 if user_id:
                     st.success("Registration successful! Please login.")
                 else:
@@ -91,37 +91,37 @@ else:
     # --- Active Run View ---
     if 'active_run_id' in st.session_state:
         run_id = st.session_state.active_run_id
-        run_title = db_service.get_run_title(run_id) or "Research"
+        run_title = db_service.get_run_title_sync(run_id) or "Research"
 
         # Token Counter
-        token_usage = db_service.get_token_usage(run_id)
+        token_usage = db_service.get_token_usage_sync(run_id)
         st.sidebar.markdown(f"**Tokens wasted:** {token_usage}")
 
         # --- Pause/Resume Control ---
-        is_running = db_service.is_swarm_running(run_id)
+        is_running = db_service.is_swarm_running_sync(run_id)
         # Zombie detection: If DB says running but no thread exists locally
         if is_running and run_id not in runner.active_runs:
             logger.info(f"Zombie run detected for {run_id}. Resetting status.")
-            db_service.set_swarm_running(run_id, False)
+            db_service.set_swarm_running_sync(run_id, False)
             is_running = False
             st.rerun()
 
         if is_running:
             if st.sidebar.button("⏸️ Pause Research", key=f"pause_sidebar_{run_id}", use_container_width=True):
-                db_service.set_pause_signal(run_id, True)
+                db_service.set_pause_signal_sync(run_id, True)
                 st.sidebar.info("Pause signal sent.")
         else:
             # Check if run is completed
-            user_runs = db_service.get_user_runs(st.session_state.user_id)
+            user_runs = db_service.get_user_runs_sync(st.session_state.user_id)
             current_run = next((r for r in user_runs if r['id'] == run_id), None)
             run_completed = current_run and current_run.get('status') == 'completed'
             
-            plan_df = db_service.get_all_plan(run_id)
+            plan_df = db_service.get_all_plan_sync(run_id)
             if not plan_df.empty:
                 incomplete_steps = plan_df[plan_df['status'].isin(['TODO', 'IN_PROGRESS', 'FAILED'])]
                 if not incomplete_steps.empty and not run_completed:
                     if st.sidebar.button("▶️ Resume Research", key=f"resume_sidebar_{run_id}", use_container_width=True):
-                        db_service.set_pause_signal(run_id, False)
+                        db_service.set_pause_signal_sync(run_id, False)
                         runner.run_in_background(
                             run_id=run_id,
                             user_id=st.session_state.user_id,
@@ -133,7 +133,7 @@ else:
 
         # --- Plan and Approvals in Sidebar ---
         st.sidebar.subheader("📋 Research Plan")
-        plan_df = db_service.get_all_plan(run_id)
+        plan_df = db_service.get_all_plan_sync(run_id)
         if not plan_df.empty:
             plan_df_display = plan_df.set_index("step_number")[["description", "status"]]
             plan_df_styled = plan_df_display.style.apply(highlight_status, subset=['status'])
@@ -142,7 +142,7 @@ else:
             st.sidebar.info("Plan is empty for this run.")
 
         # --- Agent Questions ---
-        pending_question = db_service._get_run_state(run_id, 'pending_question')
+        pending_question = db_service._get_run_state_sync(run_id, 'pending_question')
         if pending_question:
             st.sidebar.subheader("❓ Agent Question")
             st.sidebar.warning(pending_question)
@@ -150,20 +150,20 @@ else:
                 answer = st.text_input("Your answer:", key=f"answer_input_{run_id}")
                 submitted = st.form_submit_button("Submit Answer")
                 if submitted and answer:
-                    db_service._set_run_state(run_id, 'pending_question_response', answer)
+                    db_service._set_run_state_sync(run_id, 'pending_question_response', answer)
                     st.rerun()
 
         st.sidebar.subheader("🛡️ Security Approvals")
-        approvals_df = db_service.get_pending_approvals(run_id)
+        approvals_df = db_service.get_pending_approvals_sync(run_id)
         if not approvals_df.empty:
             for _, row in approvals_df.iterrows():
                 st.sidebar.code(row['command_text'], language="bash")
                 c1, c2 = st.sidebar.columns(2)
                 if c1.button("✅ Approve", key=f"approve_{row['command_hash']}"):
-                    db_service.update_approval_status(run_id, row['command_hash'], 1)
+                    db_service.update_approval_status_sync(run_id, row['command_hash'], 1)
                     st.rerun()
                 if c2.button("❌ Deny", key=f"deny_{row['command_hash']}"):
-                    db_service.update_approval_status(run_id, row['command_hash'], -1)
+                    db_service.update_approval_status_sync(run_id, row['command_hash'], -1)
                     st.rerun()
         else:
             st.sidebar.success("No pending actions for this run.")
@@ -172,12 +172,12 @@ else:
 
     # --- Run Management in Sidebar ---
     st.sidebar.subheader("Research Runs")
-    user_runs = db_service.get_user_runs(st.session_state.user_id)
+    user_runs = db_service.get_user_runs_sync(st.session_state.user_id)
     
     if st.sidebar.button("➕ New Research Run"):
         # Simple title for now, could be a form
         new_run_title = f"New Run {len(user_runs) + 1}"
-        new_run_id = db_service.create_run(st.session_state.user_id, new_run_title)
+        new_run_id = db_service.create_run_sync(st.session_state.user_id, new_run_title)
         st.session_state.active_run_id = new_run_id
         st.rerun()
 
@@ -191,7 +191,7 @@ else:
     # --- Active Run View (Title and Content) ---
     if 'active_run_id' in st.session_state:
         run_id = st.session_state.active_run_id
-        run_title = db_service.get_run_title(run_id) or "Research"
+        run_title = db_service.get_run_title_sync(run_id) or "Research"
         st.title(f"🧠 {run_title}")
 
         # --- Main Chat Area ---
@@ -249,7 +249,7 @@ else:
                                     command = tool_args.get('command', '')
                                     if command:
                                         cmd_hash = hashlib.md5(command.encode()).hexdigest()
-                                        approval_status = db_service.get_approval_status(run_id, cmd_hash)
+                                        approval_status = db_service.get_approval_status_sync(run_id, cmd_hash)
                                         
                                         if result is None:
                                             if approval_status in (None, 0):
@@ -317,11 +317,11 @@ else:
                         st.markdown(msg.content)
         
         # --- Swarm Execution Logic ---
-        is_running = db_service.is_swarm_running(run_id)
+        is_running = db_service.is_swarm_running_sync(run_id)
         
         if is_running:
             with st.status("🚀 Swarm is active...", expanded=True):
-                while db_service.is_swarm_running(run_id):
+                while db_service.is_swarm_running_sync(run_id):
                     time.sleep(2)
                     st.rerun()
             st.success("Swarm has finished its run.")
@@ -329,20 +329,20 @@ else:
             st.rerun()
 
         if prompt := st.chat_input("Input research topic...", disabled=is_running):
-            plan_df = db_service.get_all_plan(run_id)
+            plan_df = db_service.get_all_plan_sync(run_id)
             start_agent = planner_agent if plan_df.empty else executor_agent
             
             # If the run is a new run, rename it with the first prompt
-            run_title = db_service.get_run_title(run_id)
+            run_title = db_service.get_run_title_sync(run_id)
             if run_title.startswith("New Run"):
                 # Check for existing runs with the same query
-                user_runs = db_service.get_user_runs(st.session_state.user_id)
+                user_runs = db_service.get_user_runs_sync(st.session_state.user_id)
                 existing_runs = [run for run in user_runs if run['title'].startswith(prompt)]
                 if existing_runs:
                     new_run_title = f"{prompt} (chat {len(existing_runs) + 1})"
                 else:
                     new_run_title = prompt
-                db_service.update_run_title(run_id, new_run_title)
+                db_service.update_run_title_sync(run_id, new_run_title)
 
             # REDUNDANT SAVE REMOVED: db_service.save_message(run_id, "user", prompt)
             

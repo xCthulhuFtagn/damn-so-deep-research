@@ -1,5 +1,6 @@
-import requests
+import httpx
 import torch
+import asyncio
 import logging
 from sentence_transformers import util
 
@@ -10,7 +11,7 @@ from utils.text_processing import model_manager
 logger = logging.getLogger(__name__)
 
 @function_tool
-def intelligent_web_search(query: str) -> str:
+async def intelligent_web_search(query: str) -> str:
     """
     Выполняет поиск информации в интернете через Firecrawl (Search API) с глубокой фильтрацией контента.
     
@@ -35,11 +36,14 @@ def intelligent_web_search(query: str) -> str:
                 "formats": ["markdown"]
             }
         }
-        
-        resp = requests.post(search_url, json=payload, headers=headers, timeout=DEFAULT_TIMEOUT)
+
+        # Async HTTP request with httpx
+        async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+            resp = await client.post(search_url, json=payload, headers=headers)
+
         resp.raise_for_status()
         data = resp.json()
-        
+
         if not data.get("success"):
             error_msg = data.get("error", "Unknown Firecrawl error")
             logger.error(f"Firecrawl search failed: {error_msg}")

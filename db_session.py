@@ -41,20 +41,20 @@ class DBSession(Session):
             logger.warning("DBSession: No run_id in context for get_items.")
             return [_msg_item("system", "Error: No active run context.")]
 
-        plan_df = db_service.get_all_plan(run_id)
+        plan_df = await db_service.get_all_plan(run_id)
         plan_summary = "\n".join(f"Step {row['step_number']}: {row['status']}" for _, row in plan_df.iterrows())
         items: List[Dict] = [_msg_item("system", f"PROJECT STATUS (Run: {run_id}):\n{plan_summary}")]
 
         raw_messages: List[ChatMessage] = []
         if self.session_id.startswith("research_"):
-            active_task = db_service.get_active_task(run_id)
+            active_task = await db_service.get_active_task(run_id)
             if active_task is not None:
-                raw_messages.extend(db_service.get_messages_for_task(run_id, active_task))
+                raw_messages.extend(await db_service.get_messages_for_task(run_id, active_task))
             else:
-                all_msgs = db_service.load_messages(run_id)
+                all_msgs = await db_service.load_messages(run_id)
                 raw_messages.extend(all_msgs[-10:])
         else: # planner, reporter, etc.
-             all_msgs = db_service.load_messages(run_id)
+             all_msgs = await db_service.load_messages(run_id)
              raw_messages.extend(m for m in all_msgs if m.session_id == self.session_id)
 
         if limit:
@@ -148,7 +148,7 @@ class DBSession(Session):
                 # logger.debug("DBSession: Skipping empty system message. Raw item type: %s", type(item))
                 continue
 
-            db_service.save_message(
+            await db_service.save_message(
                 run_id=run_id, role=str(role), content=content,
                 tool_calls=tool_calls if isinstance(tool_calls, list) else None,
                 tool_call_id=final_call_id,
@@ -164,6 +164,7 @@ class DBSession(Session):
         if not run_id:
             logger.error("DBSession: No run_id, cannot clear session.")
             return
-        with db_service.get_connection() as conn:
-            conn.execute("DELETE FROM messages WHERE run_id = ? AND session_id = ?", (run_id, self.session_id))
+        async with db_service.get_connection() as conn:
+            await conn.execute("DELETE FROM messages WHERE run_id = ? AND session_id = ?", (run_id, self.session_id))
+            await conn.commit()
         logger.info("Cleared messages for run %s, session %s", run_id, self.session_id)

@@ -1,6 +1,6 @@
 import logging
 import hashlib
-import time
+import asyncio
 import subprocess
 from agents import function_tool
 from database import db_service
@@ -9,7 +9,7 @@ from utils.context import current_run_id
 logger = logging.getLogger(__name__)
 
 @function_tool
-def execute_terminal_command(command: str) -> str:
+async def execute_terminal_command(command: str) -> str:
     """
     Выполняет bash-команду в терминале.
     ВАЖНО: Перед выполнением требует подтверждения пользователя в UI.
@@ -20,42 +20,53 @@ def execute_terminal_command(command: str) -> str:
 
     cmd_hash = hashlib.md5(command.encode()).hexdigest()
     logger.info("execute_terminal_command: run_id=%s requested hash=%s cmd=%s", run_id, cmd_hash, command)
-    
+
     # 1. Check existing approval or create request
-    status = db_service.get_approval_status(run_id, cmd_hash)
-    
+    status = await db_service.get_approval_status(run_id, cmd_hash)
+
     if status is None:
-        db_service.request_approval(run_id, cmd_hash, command)
+        await db_service.request_approval(run_id, cmd_hash, command)
         logger.info("execute_terminal_command: approval requested for run_id=%s hash=%s", run_id, cmd_hash)
         status = 0  # Pending
 
     # 2. Loop until approved, denied, or paused
     waited = 0
     while status == 0:
-        if db_service.should_pause(run_id):
+        if await db_service.should_pause(run_id):
             logger.info("execute_terminal_command: pause signal received for run_id=%s", run_id)
             return "Execution paused by user signal."
-            
-        time.sleep(1)
+
+        await asyncio.sleep(1)  # НЕ time.sleep!
         waited += 1
         if waited % 5 == 0:
             logger.info("Waiting for approval... run_id=%s hash=%s time=%ds", run_id, cmd_hash, waited)
-            
+
         # Re-check status
-        new_status = db_service.get_approval_status(run_id, cmd_hash)
+        new_status = await db_service.get_approval_status(run_id, cmd_hash)
         status = new_status if new_status is not None else 0
 
     # 3. Handle decision
     if status == 1:
         try:
-            result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=10)
-            logger.info("execute_terminal_command: executed for run_id=%s hash=%s rc=%s", run_id, cmd_hash, result.returncode)
-            
-            combined_output = (result.stdout + "\n" + result.stderr).strip()
-            if result.returncode == 0:
-                return combined_output if combined_output else "Command executed successfully."
-            else:
-                return f"Error (exit code {result.returncode}):\n{combined_output}"
+            # Async subprocess execution
+            process = await asyncio.create_subprocess_shell(
+                command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+
+            try:
+                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=10)
+                logger.info("execute_terminal_command: executed for run_id=%s hash=%s rc=%s", run_id, cmd_hash, process.returncode)
+
+                combined_output = (stdout.decode() + "\n" + stderr.decode()).strip()
+                if process.returncode == 0:
+                    return combined_output if combined_output else "Command executed successfully."
+                else:
+                    return f"Error (exit code {process.returncode}):\n{combined_output}"
+            except asyncio.TimeoutError:
+                process.kill()
+                return "Execution Error: Command timed out after 10 seconds"
         except Exception as e:
             logger.info("execute_terminal_command failed for run_id=%s hash=%s", run_id, cmd_hash)
             return f"Execution Error: {e}"
@@ -92,15 +103,15 @@ def answer_from_knowledge(answer: str) -> str:
     return answer
 
 @function_tool
-def ask_user(question: str) -> str:
+async def ask_user(question: str) -> str:
     """
     КРИТИЧЕСКИ ВАЖНО: Этот инструмент должен использоваться ТОЛЬКО в экстренных случаях, когда агент не может продолжить работу без уточнения от пользователя.
-    
+
     Задает вопрос пользователю и ожидает ответа. Используйте этот инструмент только если:
     - Задача неоднозначна и требует уточнения
     - Недостаточно информации для продолжения работы
     - Возникла критическая ситуация, требующая вмешательства пользователя
-    
+
     НЕ используйте этот инструмент для обычных вопросов или если можно продолжить работу с имеющейся информацией.
     """
     run_id = current_run_id.get()
@@ -108,28 +119,28 @@ def ask_user(question: str) -> str:
         return "Error: No active run context."
 
     logger.info("ask_user: run_id=%s question=%s", run_id, question)
-    
+
     # Set the pending question in run_state
-    db_service._set_run_state(run_id, 'pending_question', question)
-    
+    await db_service._set_run_state(run_id, 'pending_question', question)
+
     # Wait for user response
     waited = 0
     while True:
-        if db_service.should_pause(run_id):
+        if await db_service.should_pause(run_id):
             logger.info("ask_user: pause signal received for run_id=%s", run_id)
-            db_service._set_run_state(run_id, 'pending_question', '')
+            await db_service._set_run_state(run_id, 'pending_question', '')
             return "Question cancelled due to pause signal."
-            
-        time.sleep(1)
+
+        await asyncio.sleep(1)  # НЕ time.sleep!
         waited += 1
         if waited % 5 == 0:
             logger.info("Waiting for user answer... run_id=%s time=%ds", run_id, waited)
-            
+
         # Check for response
-        response = db_service._get_run_state(run_id, 'pending_question_response')
+        response = await db_service._get_run_state(run_id, 'pending_question_response')
         if response:
             # Clear both question and response
-            db_service._set_run_state(run_id, 'pending_question', '')
-            db_service._set_run_state(run_id, 'pending_question_response', '')
+            await db_service._set_run_state(run_id, 'pending_question', '')
+            await db_service._set_run_state(run_id, 'pending_question_response', '')
             logger.info("ask_user: received answer for run_id=%s", run_id)
             return response

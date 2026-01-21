@@ -6,7 +6,7 @@ from utils.context import current_run_id
 logger = logging.getLogger(__name__)
 
 @function_tool
-def get_research_summary() -> str:
+async def get_research_summary() -> str:
     """
     Возвращает структурированный список всех уже выполненных шагов и их результаты для текущего запуска.
     """
@@ -14,36 +14,36 @@ def get_research_summary() -> str:
     if not run_id:
         return "Error: No active run context."
     logger.debug("get_research_summary called for run_id=%s", run_id)
-    return db_service.get_done_results_text(run_id)
+    return await db_service.get_done_results_text(run_id)
 
 @function_tool
-def submit_step_result(step_id: int, result_text: str) -> str:
+async def submit_step_result(step_id: int, result_text: str) -> str:
     """
     Сохраняет финальный результат выполнения текущего шага.
     """
     run_id = current_run_id.get()
     if not run_id:
         return "Error: No active run context."
-        
+
     # Пытаемся автоматически определить корректный ID активного шага
-    active_step_num = db_service.get_active_task(run_id)
+    active_step_num = await db_service.get_active_task(run_id)
     actual_id = step_id
     if active_step_num is not None:
-        resolved_id = db_service.get_step_id_by_number(run_id, active_step_num)
+        resolved_id = await db_service.get_step_id_by_number(run_id, active_step_num)
         if resolved_id and actual_id != resolved_id:
             logger.warning(f"submit_step_result: Mismatch fixed. Provided ID {step_id}, using active ID {resolved_id}")
             actual_id = resolved_id
 
     logger.info("submit_step_result: run_id=%s step_id=%s result_chars=%s", run_id, actual_id, len(result_text or ""))
-    db_service.update_step_status(actual_id, "DONE", result_text)
-    db_service.set_active_task(run_id, None)
+    await db_service.update_step_status(actual_id, "DONE", result_text)
+    await db_service.set_active_task(run_id, None)
     return f"Result saved to Database. Step {active_step_num or ''} (ID {actual_id}) marked as DONE."
 
 @function_tool
-def mark_step_failed(step_id: int, error_msg: str, is_important_failed_step: bool = True) -> str:
+async def mark_step_failed(step_id: int, error_msg: str, is_important_failed_step: bool = True) -> str:
     """
     Помечает шаг как проваленный.
-    
+
     Args:
         step_id (int): ID шага.
         error_msg (str): Сообщение об ошибке.
@@ -52,29 +52,29 @@ def mark_step_failed(step_id: int, error_msg: str, is_important_failed_step: boo
     run_id = current_run_id.get()
     if not run_id:
         return "Error: No active run context."
-        
-    active_step_num = db_service.get_active_task(run_id)
+
+    active_step_num = await db_service.get_active_task(run_id)
     actual_id = step_id
     if active_step_num is not None:
-        resolved_id = db_service.get_step_id_by_number(run_id, active_step_num)
+        resolved_id = await db_service.get_step_id_by_number(run_id, active_step_num)
         if resolved_id and actual_id != resolved_id:
             logger.warning(f"mark_step_failed: Mismatch fixed. Provided ID {step_id}, using active ID {resolved_id}")
             actual_id = resolved_id
 
     importance_prefix = "[CRITICAL] " if is_important_failed_step else "[NON-CRITICAL] "
     full_error_msg = f"{importance_prefix}{error_msg}"
-    
-    logger.warning("mark_step_failed: run_id=%s step_id=%s error_chars=%s important=%s", 
+
+    logger.warning("mark_step_failed: run_id=%s step_id=%s error_chars=%s important=%s",
                    run_id, actual_id, len(error_msg or ""), is_important_failed_step)
-    db_service.update_step_status(actual_id, "FAILED", full_error_msg)
+    await db_service.update_step_status(actual_id, "FAILED", full_error_msg)
     return f"Step {active_step_num or ''} (ID {actual_id}) marked as FAILED. Importance: {is_important_failed_step}."
 
 @function_tool
-def deem_step_unimportant(step_id: int, reason: str) -> str:
+async def deem_step_unimportant(step_id: int, reason: str) -> str:
     """
-    Помечает текущий шаг как неважный, если он завершился неудачно или безрезультатно, 
+    Помечает текущий шаг как неважный, если он завершился неудачно или безрезультатно,
     но это не мешает продолжению исследования. Это позволяет избежать корректирующих шагов.
-    
+
     Args:
         step_id (int): ID шага.
         reason (str): Пояснение, почему этот шаг можно пропустить или считать несущественным.
@@ -82,22 +82,22 @@ def deem_step_unimportant(step_id: int, reason: str) -> str:
     run_id = current_run_id.get()
     if not run_id:
         return "Error: No active run context."
-        
-    active_step_num = db_service.get_active_task(run_id)
+
+    active_step_num = await db_service.get_active_task(run_id)
     actual_id = step_id
     if active_step_num is not None:
-        resolved_id = db_service.get_step_id_by_number(run_id, active_step_num)
+        resolved_id = await db_service.get_step_id_by_number(run_id, active_step_num)
         if resolved_id and actual_id != resolved_id:
             logger.warning(f"deem_step_unimportant: Mismatch fixed. Provided ID {step_id}, using active ID {resolved_id}")
             actual_id = resolved_id
 
     logger.info("deem_step_unimportant: run_id=%s step_id=%s reason=%s", run_id, actual_id, reason)
-    db_service.update_step_status(actual_id, "SKIPPED", f"Deemed unimportant: {reason}")
-    db_service.set_active_task(run_id, None)
+    await db_service.update_step_status(actual_id, "SKIPPED", f"Deemed unimportant: {reason}")
+    await db_service.set_active_task(run_id, None)
     return f"Step {active_step_num or ''} (ID {actual_id}) marked as SKIPPED because it's unimportant. Reason: {reason}"
 
 @function_tool
-def get_recovery_context() -> str:
+async def get_recovery_context() -> str:
     """
     Возвращает контекст для восстановления: исходный запрос + план + детали провала для текущего запуска.
     """
@@ -105,9 +105,9 @@ def get_recovery_context() -> str:
     if not run_id:
         return "Error: No active run context."
 
-    prompt = db_service.get_run_title(run_id) or "N/A"
-    
-    plan_df = db_service.get_all_plan(run_id)
+    prompt = await db_service.get_run_title(run_id) or "N/A"
+
+    plan_df = await db_service.get_all_plan(run_id)
     if plan_df.empty:
         plan_summary = "Plan is empty."
     else:
@@ -116,14 +116,14 @@ def get_recovery_context() -> str:
             summary_lines.append(f"Step {row['step_number']}: {row['status']} - {row['description']}")
         plan_summary = "\n".join(summary_lines)
 
-    active_task_num = db_service.get_active_task(run_id)
+    active_task_num = await db_service.get_active_task(run_id)
     failed_context = ""
     if active_task_num:
-        msgs = db_service.get_messages_for_task(run_id, active_task_num)
+        msgs = await db_service.get_messages_for_task(run_id, active_task_num)
         failed_context = f"Step {active_task_num} logs:\n"
         for m in msgs[-5:]:
              failed_context += f"{m['role']}: {m.get('content', '')[:200]}...\n"
-    
+
     return f"""RECOVERY CONTEXT for Run ID {run_id}:
 Original Request: {prompt}
 Plan Status:
