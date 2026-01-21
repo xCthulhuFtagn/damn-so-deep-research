@@ -88,8 +88,23 @@ class SwarmRunner:
             loop = self._loop
 
         # Create async task
-        task = loop.create_task(self._run_wrapper_async(run_id, user_id, start_agent, input_text, max_turns))
-        self.active_tasks[run_id] = task
+        coro = self._run_wrapper_async(run_id, user_id, start_agent, input_text, max_turns)
+        
+        try:
+            # Check if we are running in the same loop (unlikely for Streamlit)
+            if asyncio.get_running_loop() == loop:
+                task = loop.create_task(coro)
+                self.active_tasks[run_id] = task
+            else:
+                # We are in a different thread, use threadsafe scheduling
+                future = asyncio.run_coroutine_threadsafe(coro, loop)
+                self.active_tasks[run_id] = future
+        except RuntimeError:
+            # get_running_loop raises RuntimeError if no loop is running in current thread
+            # This confirms we are in a sync thread (Streamlit)
+            future = asyncio.run_coroutine_threadsafe(coro, loop)
+            self.active_tasks[run_id] = future
+
         logger.info("Swarm async task started for run_id=%s with max_turns=%d", run_id, max_turns)
 
     async def _run_wrapper_async(self, run_id: str, user_id: str, start_agent: Agent, input_text: str, max_turns: int):
@@ -97,6 +112,9 @@ class SwarmRunner:
         token_user = current_user_id.set(user_id)
 
         try:
+            # Explicitly mark swarm as running
+            await db_service.set_swarm_running(run_id, True)
+            
             run_config = RunConfig(
                 model_provider=VLLMChatCompletionsProvider(
                     api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL, default_model=MODEL

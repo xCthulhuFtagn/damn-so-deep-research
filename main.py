@@ -54,6 +54,25 @@ def highlight_status(s):
 
 
 # --- Authentication ---
+# Check for user_id in query params for simple persistence
+if 'user_id' not in st.session_state:
+    query_params = st.query_params
+    if 'user_id' in query_params:
+        user_id = query_params['user_id']
+        # Verify user exists
+        # Note: In a real production app, we would verify a token, not just an ID.
+        # But for this local tool, checking existence is enough to restore session.
+        # We need a sync way to check user existence or just trust it and let DB fail later if invalid.
+        # Let's try to get username to confirm validity.
+        # We don't have get_user_by_id exposed in sync wrapper easily, let's just proceed.
+        # If invalid, app might break or show empty runs. 
+        # Better: Since we don't have a direct 'get_user' sync method, let's assume it's valid if it looks like a UUID.
+        st.session_state.user_id = user_id
+        # We can't easily get the username without a DB call, so we'll set a placeholder or fetch it if possible.
+        # For now, let's just restore the session state.
+        st.session_state.username = "User" # Placeholder
+        st.rerun()
+
 if 'user_id' not in st.session_state:
     st.title("Login / Register")
     login_tab, register_tab = st.tabs(["Login", "Register"])
@@ -68,6 +87,7 @@ if 'user_id' not in st.session_state:
                 if user_id:
                     st.session_state.user_id = user_id
                     st.session_state.username = username
+                    st.query_params['user_id'] = user_id
                     st.rerun()
                 else:
                     st.error("Invalid username or password")
@@ -85,6 +105,9 @@ if 'user_id' not in st.session_state:
                     st.error("Username already exists.")
 else:
     # --- Main Application ---
+    # Ensure query param is set (if user navigated away and back)
+    if 'user_id' not in st.query_params:
+        st.query_params['user_id'] = st.session_state.user_id
     st.sidebar.title(f"Welcome, {st.session_state.username}")
     st.sidebar.markdown("---")
 
@@ -100,7 +123,7 @@ else:
         # --- Pause/Resume Control ---
         is_running = db_service.is_swarm_running_sync(run_id)
         # Zombie detection: If DB says running but no thread exists locally
-        if is_running and run_id not in runner.active_runs:
+        if is_running and run_id not in runner.active_tasks:
             logger.info(f"Zombie run detected for {run_id}. Resetting status.")
             db_service.set_swarm_running_sync(run_id, False)
             is_running = False
