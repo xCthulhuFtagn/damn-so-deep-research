@@ -1,0 +1,61 @@
+version: "3.9"
+
+services:
+  backend:
+    build:
+      context: ..
+      dockerfile: infrastructure/Dockerfile.backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_PATH=/app/db/app.db
+      - LANGGRAPH_CHECKPOINT_PATH=/app/db/langgraph.db
+      - SEARXNG_URL=http://searxng:8080
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your-secret-key-change-in-production}
+      - LLM_BASE_URL=${LLM_BASE_URL:-http://localhost:1234/v1}
+      - LLM_API_KEY=${LLM_API_KEY:-not-needed}
+      - LLM_MODEL=${LLM_MODEL:-gpt-4}
+      - FIRECRAWL_API_KEY=${FIRECRAWL_API_KEY:-}
+    volumes:
+      - ../db:/app/db
+      - ../.env:/app/.env:ro
+    depends_on:
+      - searxng
+    networks:
+      - research-net
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: infrastructure/Dockerfile.frontend
+    ports:
+      - "5173:80"
+    environment:
+      - VITE_API_URL=http://localhost:8000
+      - VITE_WS_URL=ws://localhost:8000
+    depends_on:
+      - backend
+    networks:
+      - research-net
+    restart: unless-stopped
+
+  searxng:
+    image: searxng/searxng:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+      - ./searxng/limiter.toml:/etc/searxng/limiter.toml:ro
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8080/
+    networks:
+      - research-net
+    restart: unless-stopped
+
+networks:
+  research-net:
+    driver: bridge
+
+volumes:
+  db-data:
