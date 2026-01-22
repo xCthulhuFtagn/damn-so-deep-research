@@ -37,16 +37,16 @@ export default function ResearchPage() {
   };
 
   return (
-    <div className="flex h-screen bg-slate-50">
+    <div className="flex h-screen bg-slate-50 dark:bg-slate-950">
       {/* Sidebar */}
-      <div className="w-80 border-r border-slate-200 bg-white flex flex-col">
-        <div className="p-4 border-b border-slate-200">
-          <h1 className="text-lg font-semibold text-slate-900">Deep Research</h1>
-          <p className="text-sm text-slate-500">Welcome, {user?.username}</p>
+      <div className="w-80 border-r border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col">
+        <div className="p-4 border-b border-slate-200 dark:border-slate-800">
+          <h1 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Deep Research</h1>
+          <p className="text-sm text-slate-500 dark:text-slate-400">Welcome, {user?.username}</p>
         </div>
 
         {/* New Run Button/Form */}
-        <div className="p-4 border-b border-slate-200">
+        <div className="p-4 border-b border-slate-200 dark:border-slate-800">
           {showNewRunForm ? (
             <div className="space-y-2">
               <input
@@ -54,7 +54,7 @@ export default function ResearchPage() {
                 value={newRunTitle}
                 onChange={(e) => setNewRunTitle(e.target.value)}
                 placeholder="Research topic..."
-                className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100"
                 onKeyDown={(e) => e.key === 'Enter' && handleCreateRun()}
               />
               <div className="flex gap-2">
@@ -66,7 +66,7 @@ export default function ResearchPage() {
                 </button>
                 <button
                   onClick={() => setShowNewRunForm(false)}
-                  className="px-3 py-1.5 border border-slate-300 rounded-md text-sm hover:bg-slate-50"
+                  className="px-3 py-1.5 border border-slate-300 dark:border-slate-600 rounded-md text-sm hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300"
                 >
                   Cancel
                 </button>
@@ -96,10 +96,10 @@ export default function ResearchPage() {
         />
 
         {/* Logout */}
-        <div className="mt-auto p-4 border-t border-slate-200">
+        <div className="mt-auto p-4 border-t border-slate-200 dark:border-slate-800">
           <button
             onClick={logout}
-            className="w-full px-4 py-2 text-sm text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-md"
+            className="w-full px-4 py-2 text-sm text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md"
           >
             Sign out
           </button>
@@ -107,7 +107,7 @@ export default function ResearchPage() {
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 flex flex-col">
+      <div className="flex-1 flex flex-col bg-slate-50 dark:bg-slate-950">
         {runId ? (
           <ChatContainer
             messages={research.messages}
@@ -122,7 +122,7 @@ export default function ResearchPage() {
           />
         ) : (
           <div className="flex-1 flex items-center justify-center">
-            <div className="text-center text-slate-500">
+            <div className="text-center text-slate-500 dark:text-slate-400">
               <p className="text-lg">Select a research run or create a new one</p>
               <p className="text-sm mt-2">
                 Start by clicking "New Research" in the sidebar

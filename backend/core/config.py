@@ -90,7 +90,11 @@ class DatabaseSettings(BaseSettings):
 
     app_db_name: str = Field(default="app.db", alias="APP_DB_NAME")
     langgraph_db_name: str = Field(default="langgraph.db", alias="LANGGRAPH_DB_NAME")
-    base_dir: Path = Field(default=Path("db"), alias="DB_BASE_DIR")
+    # Base dir relative to project root
+    base_dir: Path = Field(
+        default=Path(__file__).resolve().parent.parent.parent / "db",
+        alias="DB_BASE_DIR"
+    )
 
     @property
     def app_db_path(self) -> str:
@@ -100,6 +104,8 @@ class DatabaseSettings(BaseSettings):
     @property
     def langgraph_db_path(self) -> str:
         """Full path to the LangGraph checkpoint database."""
+        # AsyncSqliteSaver.from_conn_string expects a URI or path
+        # We use strict path to avoid CWD ambiguity
         return str(self.base_dir / self.langgraph_db_name)
 
 

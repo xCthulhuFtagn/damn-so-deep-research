@@ -23,13 +23,13 @@ function getMessageIcon(role: Message['role']) {
 function getMessageStyle(role: Message['role']) {
   switch (role) {
     case 'user':
-      return 'bg-primary-50 border-primary-200';
+      return 'bg-primary-50 dark:bg-primary-900/20 border-primary-200 dark:border-primary-800';
     case 'assistant':
-      return 'bg-white border-slate-200';
+      return 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700';
     case 'tool':
-      return 'bg-slate-50 border-slate-200';
+      return 'bg-slate-50 dark:bg-slate-800/50 border-slate-200 dark:border-slate-700';
     default:
-      return 'bg-white border-slate-200';
+      return 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700';
   }
 }
 
@@ -49,17 +49,17 @@ export default function MessageList({ messages }: MessageListProps) {
               className={clsx(
                 'flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center',
                 message.role === 'user'
-                  ? 'bg-primary-100 text-primary-600'
+                  ? 'bg-primary-100 dark:bg-primary-900 text-primary-600 dark:text-primary-300'
                   : message.role === 'tool'
-                  ? 'bg-slate-200 text-slate-600'
-                  : 'bg-slate-100 text-slate-600'
+                  ? 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
+                  : 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
               )}
             >
               {getMessageIcon(message.role)}
             </div>
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-1">
-                <span className="text-sm font-medium text-slate-900">
+                <span className="text-sm font-medium text-slate-900 dark:text-slate-100">
                   {message.name ||
                     (message.role === 'user'
                       ? 'You'
@@ -67,11 +67,11 @@ export default function MessageList({ messages }: MessageListProps) {
                       ? 'Tool'
                       : 'Assistant')}
                 </span>
-                <span className="text-xs text-slate-400">
+                <span className="text-xs text-slate-400 dark:text-slate-500">
                   {message.role}
                 </span>
               </div>
-              <div className="prose prose-sm prose-slate max-w-none markdown-content">
+              <div className="prose prose-sm prose-slate dark:prose-invert max-w-none markdown-content">
                 <ReactMarkdown>{message.content}</ReactMarkdown>
               </div>
             </div>

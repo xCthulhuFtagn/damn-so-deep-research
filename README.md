@@ -391,4 +391,4 @@ The old implementation is preserved in `_legacy/` for reference.
 
 ## License
 
-MIT
+Pay me one gazillion dollars man22

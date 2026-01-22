@@ -13,10 +13,10 @@ export default function ApprovalPanel({
   onDeny,
 }: ApprovalPanelProps) {
   return (
-    <div className="p-4 border-b border-slate-200 bg-yellow-50">
+    <div className="p-4 border-b border-slate-200 dark:border-slate-800 bg-yellow-50 dark:bg-yellow-900/10">
       <div className="flex items-center gap-2 mb-3">
-        <AlertTriangle className="w-4 h-4 text-yellow-600" />
-        <h3 className="text-sm font-semibold text-yellow-800">
+        <AlertTriangle className="w-4 h-4 text-yellow-600 dark:text-yellow-500" />
+        <h3 className="text-sm font-semibold text-yellow-800 dark:text-yellow-200">
           Pending Approvals ({approvals.length})
         </h3>
       </div>
@@ -25,10 +25,10 @@ export default function ApprovalPanel({
         {approvals.map((approval) => (
           <div
             key={approval.command_hash}
-            className="p-3 bg-white rounded-md border border-yellow-200"
+            className="p-3 bg-white dark:bg-slate-900 rounded-md border border-yellow-200 dark:border-yellow-800"
           >
-            <p className="text-xs text-slate-500 mb-1">Command to execute:</p>
-            <code className="block text-sm bg-slate-100 p-2 rounded font-mono text-slate-800 overflow-x-auto">
+            <p className="text-xs text-slate-500 dark:text-slate-400 mb-1">Command to execute:</p>
+            <code className="block text-sm bg-slate-100 dark:bg-slate-800 p-2 rounded font-mono text-slate-800 dark:text-slate-200 overflow-x-auto">
               {approval.command_text}
             </code>
             <div className="flex gap-2 mt-3">
