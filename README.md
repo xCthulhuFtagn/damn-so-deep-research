@@ -209,84 +209,66 @@ class ResearchState(TypedDict):
     user_id: str
 ```
 
-## Project Structure
+## Project Structure & Module Roles
 
-```
-damn-so-deep-research/
-│
-├── backend/                        # FastAPI + LangGraph
-│   ├── main.py                     # FastAPI app entry point
-│   │
-│   ├── agents/                     # LangGraph agent system
-│   │   ├── graph.py                # Main StateGraph definition
-│   │   ├── state.py                # ResearchState TypedDict
-│   │   ├── routing.py              # Conditional edge functions
-│   │   ├── nodes/
-│   │   │   ├── planner.py          # Plan creation
-│   │   │   ├── executor.py         # Theme identification
-│   │   │   ├── search.py           # Search execution & merge
-│   │   │   ├── evaluator.py        # Result validation
-│   │   │   ├── strategist.py       # Failure recovery
-│   │   │   └── reporter.py         # Report generation
-│   │   └── parallel/
-│   │       └── search_fanout.py    # Send API fan-out logic
-│   │
-│   ├── api/                        # REST + WebSocket endpoints
-│   │   ├── routes/
-│   │   │   ├── auth.py             # /auth/login, /auth/register
-│   │   │   ├── runs.py             # /runs CRUD
-│   │   │   ├── research.py         # /research/start, /pause
-│   │   │   └── approvals.py        # /approvals/respond
-│   │   ├── websocket.py            # Real-time updates
-│   │   └── dependencies.py         # JWT auth
-│   │
-│   ├── tools/                      # LangChain tools
-│   │   ├── search.py               # intelligent_web_search
-│   │   ├── filesystem.py           # read_file, execute_command
-│   │   └── knowledge.py            # answer_from_knowledge
-│   │
-│   ├── core/                       # Infrastructure
-│   │   ├── config.py               # Pydantic settings
-│   │   ├── llm.py                  # LLM provider
-│   │   └── checkpointer.py         # AsyncSqliteSaver
-│   │
-│   ├── persistence/                # Database
-│   │   ├── database.py             # Async SQLite
-│   │   └── models.py               # Pydantic models
-│   │
-│   ├── services/                   # Business logic
-│   │   ├── research_service.py     # Graph orchestration
-│   │   └── notification_service.py # WebSocket broadcasts
-│   │
-│   └── ml/                         # ML models
-│       └── text_processing.py      # Bi-encoder, cross-encoder
-│
-├── frontend/                       # React (Vite)
-│   └── src/
-│       ├── components/
-│       │   ├── Chat/               # Message list, input
-│       │   ├── Sidebar/            # Plan view, run list
-│       │   └── Auth/               # Login, register
-│       ├── hooks/                  # useAuth, useWebSocket
-│       ├── stores/                 # Zustand state
-│       ├── api/                    # API client
-│       └── types/                  # TypeScript types
-│
-├── infrastructure/                 # Docker configuration
-│   ├── docker-compose.yml
-│   ├── Dockerfile.backend
-│   ├── Dockerfile.frontend
-│   └── searxng/                    # SearXNG config
-│
-├── tests/                          # Test suite
-│   └── backend/
-│       ├── test_state.py
-│       ├── test_api.py
-│       └── test_parallel.py
-│
-├── _legacy/                        # Old Swarm implementation (archived)
-└── pyproject.toml                  # Python dependencies
-```
+The project is divided into a **FastAPI backend** and a **React frontend**, with a clear separation of concerns between agent orchestration, API delivery, and user interface.
+
+### 📂 Backend (`/backend`)
+
+The backend follows a service-oriented architecture, with LangGraph handling the complex agentic workflows.
+
+#### 🤖 Agent System (`backend/agents/`)
+Core orchestration logic using LangGraph.
+- **`graph.py`**: The "brain" of the system. Defines the `StateGraph`, connecting nodes (agents) with edges and conditional routing logic.
+- **`state.py`**: Defines `ResearchState`, the shared data structure that agents read from and write to during a research run.
+- **`routing.py`**: Contains the logic for "conditional edges" — determining the next node based on the current state (e.g., whether to retry a search or move to reporting).
+- **`nodes/`**: Individual functional units of the workflow.
+    - `planner.py`: Breaks down high-level queries into a sequence of actionable research steps.
+    - `executor.py`: Prepares context for the current step and identifies specific search themes.
+    - `search.py`: Executes web searches and merges results into the state findings.
+    - `evaluator.py`: Critically assesses findings against step goals to determine completion or failure.
+    - `strategist.py`: Handles recovery logic, adjusting the plan when steps fail or yield insufficient data.
+    - `reporter.py`: Synthesizes all accumulated findings into a final, structured Markdown report.
+- **`parallel/`**: Logic for concurrent operations.
+    - `search_fanout.py`: Uses LangGraph's `Send` API to trigger multiple search nodes in parallel for different themes.
+
+#### 🔌 API Layer (`backend/api/`)
+Handles communication with the outside world.
+- **`routes/`**: RESTful endpoints for authentication, research control, and data retrieval.
+- **`websocket.py`**: Low-level WebSocket management for real-time bi-directional updates.
+- **`dependencies.py`**: FastAPI dependencies for JWT validation, database sessions, and service injection.
+
+#### 🛠️ Tools (`backend/tools/`)
+Functional capabilities provided to agents.
+- **`search.py`**: High-level interface for SearXNG and Firecrawl with built-in scraping logic.
+- **`filesystem.py`**: Safe file operations and terminal command execution with human-in-the-loop protection.
+- **`knowledge.py`**: Local RAG capabilities to answer questions from indexed research data.
+
+#### 💼 Services (`backend/services/`)
+High-level business logic and orchestration.
+- **`research_service.py`**: Manages the lifecycle of research runs (start, pause, resume, cancel) and interfaces directly with the LangGraph.
+- **`notification_service.py`**: Centralized hub for broadcasting events (phase changes, new messages, logs) to the frontend via WebSockets.
+
+#### 🏗️ Core & Infrastructure
+- **`core/`**: Global configuration (`config.py`), LLM provider setup (`llm.py`), and persistence checkpointers (`checkpointer.py`).
+- **`persistence/`**: Database schema (`models.py`) and connection management (`database.py`) using SQLAlchemy and SQLite.
+- **`ml/`**: Advanced text processing utilities (`text_processing.py`), including bi-encoder/cross-encoder models for result re-ranking.
+
+---
+
+### 💻 Frontend (`/frontend`)
+
+A modern React application built with TypeScript, Vite, and Tailwind CSS.
+
+- **`src/components/`**: UI components categorized by feature.
+    - `Chat/`: The main research interface, handling message rendering and user input.
+    - `Sidebar/`: Contextual panels for viewing the research plan, history, and pending approvals.
+    - `Auth/`: User registration and login flows.
+- **`src/stores/`**: Global state management using Zustand, separating `authStore` (user session) from `researchStore` (active run data).
+- **`src/hooks/`**: Custom hooks encapsulating complex logic like WebSocket connectivity (`useWebSocket`) and research lifecycle management (`useResearch`).
+- **`src/api/`**: Strongly typed API clients for both REST and WebSocket communication.
+
+---
 
 ## API Reference
 
@@ -391,4 +373,4 @@ The old implementation is preserved in `_legacy/` for reference.
 
 ## License
 
-Pay me one gazillion dollars man22
+Pay me one gazillion dollars man
