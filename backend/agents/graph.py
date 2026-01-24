@@ -62,16 +62,16 @@ def build_research_graph() -> StateGraph:
     # Start -> Planner
     builder.add_edge(START, "planner")
 
-    # Planner routes via Command (already handled in node)
-    # But we need a default edge for the builder
-    builder.add_edge("planner", "identify_themes")
+    # Planner routes via Command.goto - no static edge needed
 
     # Identify themes -> search fanout (conditional)
+    # Can route to: planner (replan), merge_results (no themes), or fan-out to search_node
     builder.add_conditional_edges(
         "identify_themes",
         route_search_fanout,
         # Map return values to node names
         {
+            "planner": "planner",  # Re-plan case
             "merge_results": "merge_results",  # No themes case
             # Send objects handled automatically
         },
@@ -84,11 +84,10 @@ def build_research_graph() -> StateGraph:
     builder.add_edge("merge_results", "evaluator")
 
     # Evaluator routes via Command (to identify_themes, strategist, or reporter)
-    # Default edge for builder structure
-    builder.add_edge("evaluator", "identify_themes")
+    # NO static edge here - Command.goto handles routing dynamically
 
     # Strategist routes via Command (to identify_themes or reporter)
-    builder.add_edge("strategist", "identify_themes")
+    # NO static edge here - Command.goto handles routing dynamically
 
     # Reporter -> END
     builder.add_edge("reporter", END)

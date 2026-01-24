@@ -55,6 +55,27 @@ def add_or_reset_count(existing: int, new: int) -> int:
         return existing + new  # Increment
 
 
+def replace_plan(
+    existing: list[PlanStep], new: list[PlanStep]
+) -> list[PlanStep]:
+    """
+    Reducer for plan updates - last write wins.
+
+    This allows multiple nodes (e.g., strategist -> identify_themes) to update
+    the plan in the same graph step without causing concurrent update errors.
+    """
+    return new
+
+
+def last_value(existing: Any, new: Any) -> Any:
+    """
+    Generic reducer - last write wins.
+
+    Used for scalar fields that may be updated by multiple nodes in the same step.
+    """
+    return new
+
+
 class ResearchState(TypedDict):
     """
     Main state schema for the research graph.
@@ -67,24 +88,28 @@ class ResearchState(TypedDict):
     messages: Annotated[list, add_messages]
 
     # --- Research Plan ---
-    plan: list[PlanStep]
-    current_step_index: int
+    # Annotated with reducers to allow sequential updates from multiple nodes
+    plan: Annotated[list[PlanStep], replace_plan]
+    current_step_index: Annotated[int, last_value]
 
     # --- Execution Phase Tracking ---
-    phase: Literal[
-        "planning",
-        "awaiting_confirmation",
-        "identifying_themes",
-        "searching",
-        "evaluating",
-        "recovering",
-        "reporting",
-        "done",
-        "paused",
+    phase: Annotated[
+        Literal[
+            "planning",
+            "awaiting_confirmation",
+            "identifying_themes",
+            "searching",
+            "evaluating",
+            "recovering",
+            "reporting",
+            "done",
+            "paused",
+        ],
+        last_value,
     ]
 
     # --- Parallel Search Context ---
-    search_themes: list[str]  # Themes to search in parallel
+    search_themes: Annotated[list[str], last_value]  # Themes to search in parallel
     parallel_search_results: Annotated[list[SearchResult], merge_search_results]
     step_findings: Annotated[list[str], merge_findings]  # Collected findings for current step
 
@@ -93,14 +118,15 @@ class ResearchState(TypedDict):
     max_searches_per_step: int  # Limit (default 3)
 
     # --- Human-in-the-Loop ---
-    pending_approval: Optional[dict]  # {command: str, hash: str}
-    pending_question: Optional[str]
-    user_response: Optional[str]
+    pending_approval: Annotated[Optional[dict], last_value]  # {command: str, hash: str}
+    pending_question: Annotated[Optional[str], last_value]
+    user_response: Annotated[Optional[str], last_value]
+    needs_replan: Annotated[bool, last_value]  # Flag to trigger re-planning after rejection
 
     # --- Error Recovery ---
-    last_error: Optional[str]
-    failed_step_id: Optional[int]
-    recovery_attempts: int
+    last_error: Annotated[Optional[str], last_value]
+    failed_step_id: Annotated[Optional[int], last_value]
+    recovery_attempts: Annotated[int, last_value]
 
     # --- Metadata ---
     run_id: str
@@ -138,6 +164,7 @@ def create_initial_state(
         pending_approval=None,
         pending_question=None,
         user_response=None,
+        needs_replan=False,
         last_error=None,
         failed_step_id=None,
         recovery_attempts=0,

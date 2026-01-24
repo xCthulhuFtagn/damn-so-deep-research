@@ -229,15 +229,15 @@ class ResearchService:
                 feedback = user_input[7:].strip()  # Remove "reject:" prefix
                 logger.info(f"Plan rejected for run {run_id}, feedback: {feedback}")
 
-                # Update state with feedback and reset to planning phase
+                # Update state with feedback and set replan flag
+                # When graph resumes, identify_themes will see needs_replan=True
+                # and route back to planner via the conditional edge
                 await graph.aupdate_state(
                     config,
                     {
                         "user_response": feedback,
-                        "phase": "planning",
-                        "plan": [],  # Clear old plan
+                        "needs_replan": True,
                     },
-                    as_node="planner",  # Update as if from planner node
                 )
 
                 # Notify user of re-planning
@@ -288,8 +288,18 @@ class ResearchService:
                     await db.update_run(run_id, status="awaiting_confirmation")
                 return
 
+            # Extract report from messages (same as execute_research)
+            report = None
+            if final_state and final_state.values:
+                messages = final_state.values.get("messages", [])
+                for msg in reversed(messages):
+                    if hasattr(msg, "name") and msg.name == "Reporter":
+                        report = msg.content
+                        break
+
             await db.update_run(run_id, status="completed")
-            await notification.notify_run_complete(run_id)
+            await notification.notify_run_complete(run_id, report=report)
+            logger.info(f"Research completed for run {run_id}")
 
         except Exception as e:
             logger.exception(f"Resume error for run {run_id}: {e}")

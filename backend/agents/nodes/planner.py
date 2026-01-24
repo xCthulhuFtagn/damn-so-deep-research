@@ -144,6 +144,7 @@ Please create an improved research plan that addresses the user's feedback."""),
             "phase": "awaiting_confirmation",
             "current_step_index": 0,
             "user_response": None,  # Clear user feedback after using it
+            "needs_replan": False,  # Clear replan flag
             "messages": [
                 HumanMessage(content=state["original_query"]),
                 response,

@@ -53,6 +53,7 @@ async def identify_themes_node(
     Identifies search themes for the current plan step.
 
     Returns state updates. Routing is handled by conditional edges:
+    - If needs_replan is True -> routes back to planner
     - If search_themes is populated -> route_search_fanout fans out to search_node
     - If search_themes is empty -> routes to merge_results
     """
@@ -61,6 +62,15 @@ async def identify_themes_node(
     current_idx = state["current_step_index"]
 
     logger.info(f"Identify themes for run {run_id}, step {current_idx}")
+
+    # Check if we need to re-plan (user rejected the plan)
+    if state.get("needs_replan", False):
+        logger.info(f"Re-planning requested for run {run_id}")
+        # Return special marker for routing back to planner
+        return {
+            "needs_replan": True,  # Keep flag for routing
+            "phase": "planning",
+        }
 
     # Check if we have more steps to process
     todo_steps = [s for s in plan if s["status"] == "TODO"]

@@ -8,6 +8,7 @@ from typing import Literal, Sequence
 from langgraph.constants import Send
 
 from backend.agents.state import ResearchState
+from backend.agents.parallel.search_fanout import fanout_searches
 
 logger = logging.getLogger(__name__)
 
@@ -41,9 +42,15 @@ def route_search_fanout(state: ResearchState) -> Sequence[Send] | str:
     """
     Conditional edge for search fan-out.
 
+    If needs_replan is True, route back to planner.
     If themes exist, fan out to parallel searches.
     If no themes, skip to merge (which will be empty).
     """
+    # Check for replan request first
+    if state.get("needs_replan", False):
+        logger.info("Routing back to planner for re-planning")
+        return "planner"
+
     themes = state.get("search_themes", [])
 
     if not themes:
@@ -51,7 +58,6 @@ def route_search_fanout(state: ResearchState) -> Sequence[Send] | str:
         return "merge_results"
 
     # Fan out to parallel searches
-    from backend.agents.parallel.search_fanout import fanout_searches
     return fanout_searches(state)
 
 
