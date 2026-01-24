@@ -70,7 +70,7 @@ def parse_plan_steps(content: str) -> list[str]:
 
 async def planner_node(
     state: ResearchState,
-) -> Command[Literal["identify_themes", "__end__"]]:
+) -> dict:
     """
     Planner node - generates research plan from user query.
 
@@ -138,17 +138,14 @@ Please create an improved research plan that addresses the user's feedback."""),
 
     logger.info(f"Created plan with {len(plan)} steps")
 
-    return Command(
-        update={
-            "plan": plan,
-            "phase": "awaiting_confirmation",
-            "current_step_index": 0,
-            "user_response": None,  # Clear user feedback after using it
-            "needs_replan": False,  # Clear replan flag
-            "messages": [
-                HumanMessage(content=state["original_query"]),
-                response,
-            ],
-        },
-        goto="identify_themes",
-    )
+    return {
+        "plan": plan,
+        "phase": "awaiting_confirmation",
+        "current_step_index": 0,
+        "user_response": None,  # Clear user feedback after using it
+        "needs_replan": False,  # Clear replan flag
+        "messages": [
+            HumanMessage(content=state["original_query"]),
+            response,
+        ],
+    }

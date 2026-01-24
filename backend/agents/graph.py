@@ -62,7 +62,8 @@ def build_research_graph() -> StateGraph:
     # Start -> Planner
     builder.add_edge(START, "planner")
 
-    # Planner routes via Command.goto - no static edge needed
+    # Planner -> Identify themes
+    builder.add_edge("planner", "identify_themes")
 
     # Identify themes -> search fanout (conditional)
     # Can route to: planner (replan), merge_results (no themes), or fan-out to search_node
