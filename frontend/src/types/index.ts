@@ -15,7 +15,7 @@ export interface AuthResponse {
 export interface Run {
   id: string;
   title: string;
-  status: 'active' | 'paused' | 'completed' | 'failed';
+  status: 'active' | 'paused' | 'completed' | 'failed' | 'awaiting_confirmation';
   created_at: string;
   total_tokens: number;
 }
@@ -85,6 +85,7 @@ export type WSEventType =
   | 'approval_needed'
   | 'approval_response'
   | 'question'
+  | 'plan_confirmation_needed'
   | 'run_start'
   | 'run_complete'
   | 'run_error'
@@ -137,4 +138,9 @@ export interface RunCompleteEvent extends WSEvent {
 export interface RunErrorEvent extends WSEvent {
   type: 'run_error';
   error: string;
+}
+
+export interface PlanConfirmationNeededEvent extends WSEvent {
+  type: 'plan_confirmation_needed';
+  plan: PlanStep[];
 }

@@ -151,9 +151,10 @@ async def send_message(
     db: DatabaseService = Depends(get_db_service),
 ):
     """
-    Send a follow-up message to a paused research run.
+    Send a message to a research run.
 
-    Resumes execution with the new user input.
+    If research hasn't started yet, this starts it with the message as the query.
+    If research is paused/waiting, this resumes it with the message as user input.
     """
     if not request.message:
         raise HTTPException(
@@ -178,18 +179,45 @@ async def send_message(
 
     service = await get_research_service()
 
-    # Resume with user message
-    background_tasks.add_task(
-        service.resume_with_input,
-        run_id=request.run_id,
-        user_input=request.message,
-    )
+    # Check if state exists (research has been started before)
+    existing_state = await service.get_state(request.run_id)
 
-    return {
-        "status": "resuming",
-        "run_id": request.run_id,
-        "message": "Resuming with user input",
-    }
+    if existing_state is None:
+        # No state exists - this is the first message, start research
+        logger.info(f"No existing state for run {request.run_id}, starting research")
+        background_tasks.add_task(
+            service.execute_research,
+            run_id=request.run_id,
+            user_id=current_user.id,
+            initial_query=request.message,
+        )
+
+        # Broadcast start event
+        manager = get_connection_manager()
+        await manager.broadcast(
+            request.run_id,
+            create_ws_event(WSEventType.RUN_START, run_id=request.run_id),
+        )
+
+        return {
+            "status": "started",
+            "run_id": request.run_id,
+            "message": "Research started with your query",
+        }
+    else:
+        # State exists - resume with user input
+        logger.info(f"Resuming run {request.run_id} with user input")
+        background_tasks.add_task(
+            service.resume_with_input,
+            run_id=request.run_id,
+            user_input=request.message,
+        )
+
+        return {
+            "status": "resuming",
+            "run_id": request.run_id,
+            "message": "Resuming with user input",
+        }
 
 
 @router.get("/state/{run_id}", response_model=ResearchStateResponse)

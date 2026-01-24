@@ -23,11 +23,11 @@ for key in ["ALL_PROXY", "all_proxy"]:
 class LLMSettings(BaseSettings):
     """LLM API configuration."""
 
-    model_config = SettingsConfigDict(env_prefix="OPENAI_")
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    api_key: str = Field(default="EMPTY", alias="OPENAI_API_KEY")
-    base_url: str = Field(default="http://localhost:8000/v1", alias="OPENAI_BASE_URL")
-    model: str = Field(default="gpt-oss-20b", alias="OPENAI_MODEL")
+    api_key: str = Field(default="EMPTY", validation_alias="OPENAI_API_KEY")
+    base_url: str = Field(default="http://localhost:8000/v1", validation_alias="OPENAI_BASE_URL")
+    model: str = Field(default="gpt-oss-20b", validation_alias="OPENAI_MODEL")
 
     @field_validator("api_key")
     @classmethod

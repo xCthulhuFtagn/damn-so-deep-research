@@ -144,6 +144,20 @@ class NotificationService:
             ),
         )
 
+    async def notify_plan_confirmation_needed(
+        self,
+        run_id: str,
+        plan: list,
+    ) -> None:
+        """Notify clients that plan confirmation is needed."""
+        await self.manager.broadcast(
+            run_id,
+            create_ws_event(
+                WSEventType.PLAN_CONFIRMATION_NEEDED,
+                plan=plan,
+            ),
+        )
+
     async def notify_run_complete(
         self,
         run_id: str,

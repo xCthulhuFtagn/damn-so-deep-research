@@ -23,12 +23,14 @@ interface ResearchState {
   // UI state
   isLoading: boolean;
   error: string | null;
+  showPlanConfirmationModal: boolean;
 
   // Actions - Runs
   fetchRuns: () => Promise<void>;
   createRun: (title: string) => Promise<Run>;
   selectRun: (runId: string) => Promise<void>;
   deleteRun: (runId: string) => Promise<void>;
+  updateRunTitle: (runId: string, title: string) => Promise<void>;
 
   // Actions - Research
   startResearch: (message?: string) => Promise<void>;
@@ -49,6 +51,11 @@ interface ResearchState {
   setPhase: (phase: string) => void;
   clearError: () => void;
   reset: () => void;
+
+  // Actions - Plan Confirmation
+  confirmPlan: (feedback?: string) => Promise<void>;
+  rejectPlan: (feedback: string) => Promise<void>;
+  closePlanConfirmationModal: () => void;
 }
 
 export const useResearchStore = create<ResearchState>((set, get) => ({
@@ -63,6 +70,7 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
   pendingApprovals: [],
   isLoading: false,
   error: null,
+  showPlanConfirmationModal: false,
 
   // Runs
   fetchRuns: async () => {
@@ -128,6 +136,23 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
     }
   },
 
+  updateRunTitle: async (runId: string, title: string) => {
+    try {
+      await runsApi.update(runId, { title });
+      set((state) => ({
+        runs: state.runs.map((r) =>
+          r.id === runId ? { ...r, title } : r
+        ),
+        currentRun:
+          state.currentRun?.id === runId
+            ? { ...state.currentRun, title }
+            : state.currentRun,
+      }));
+    } catch (error) {
+      console.error('Failed to update run title:', error);
+    }
+  },
+
   // Research
   startResearch: async (message?: string) => {
     const { currentRun } = get();
@@ -155,18 +180,29 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
   },
 
   sendMessage: async (message: string) => {
-    const { currentRun } = get();
+    const { currentRun, messages, updateRunTitle } = get();
     if (!currentRun) return;
+
+    // Check if this is the first message (no existing messages)
+    const isFirstMessage = messages.length === 0;
 
     // Add user message immediately
     set((state) => ({
       messages: [...state.messages, { role: 'user', content: message }],
+      isRunning: true,
     }));
 
     try {
+      // If first message, update the run title to the query
+      if (isFirstMessage) {
+        // Truncate long queries for the title
+        const title = message.length > 100 ? message.substring(0, 97) + '...' : message;
+        await updateRunTitle(currentRun.id, title);
+      }
+
       await researchApi.sendMessage(currentRun.id, message);
     } catch (error) {
-      set({ error: 'Failed to send message' });
+      set({ error: 'Failed to send message', isRunning: false });
     }
   },
 
@@ -288,6 +324,14 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
       case 'run_paused':
         set({ isRunning: false, phase: 'paused' });
         break;
+
+      case 'plan_confirmation_needed':
+        set({
+          plan: event.plan as PlanStep[],
+          showPlanConfirmationModal: true,
+          isRunning: false,
+        });
+        break;
     }
   },
 
@@ -317,6 +361,43 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
       searchThemes: [],
       pendingApprovals: [],
       error: null,
+      showPlanConfirmationModal: false,
     });
+  },
+
+  // Plan Confirmation
+  confirmPlan: async (feedback?: string) => {
+    const { currentRun } = get();
+    if (!currentRun) return;
+
+    set({ showPlanConfirmationModal: false, isRunning: true });
+
+    try {
+      // Send confirmation message to resume research
+      const message = feedback
+        ? `approve: ${feedback}`
+        : 'approve';
+      await researchApi.sendMessage(currentRun.id, message);
+    } catch (error) {
+      set({ error: 'Failed to confirm plan', isRunning: false });
+    }
+  },
+
+  rejectPlan: async (feedback: string) => {
+    const { currentRun } = get();
+    if (!currentRun) return;
+
+    set({ showPlanConfirmationModal: false, isRunning: true });
+
+    try {
+      // Send rejection message with feedback to regenerate plan
+      await researchApi.sendMessage(currentRun.id, `reject: ${feedback}`);
+    } catch (error) {
+      set({ error: 'Failed to reject plan', isRunning: false });
+    }
+  },
+
+  closePlanConfirmationModal: () => {
+    set({ showPlanConfirmationModal: false });
   },
 }));

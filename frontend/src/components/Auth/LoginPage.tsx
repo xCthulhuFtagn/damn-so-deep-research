@@ -19,13 +19,13 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-50 py-12 px-4">
+    <div className="min-h-screen flex items-center justify-center bg-blue-50 py-12 px-4">
       <div className="max-w-md w-full space-y-8">
         <div>
-          <h1 className="text-3xl font-bold text-center text-slate-900">
+          <h1 className="text-3xl font-bold text-center text-blue-900">
             Damn So Deep Research
           </h1>
-          <h2 className="mt-6 text-center text-xl text-slate-600">
+          <h2 className="mt-6 text-center text-xl text-blue-600">
             Sign in to your account
           </h2>
         </div>
@@ -46,7 +46,7 @@ export default function LoginPage() {
 
           <div className="space-y-4">
             <div>
-              <label htmlFor="username" className="block text-sm font-medium text-slate-700">
+              <label htmlFor="username" className="block text-sm font-medium text-blue-700">
                 Username
               </label>
               <input
@@ -56,12 +56,12 @@ export default function LoginPage() {
                 required
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                className="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+                className="mt-1 block w-full px-3 py-2 border border-blue-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
               />
             </div>
 
             <div>
-              <label htmlFor="password" className="block text-sm font-medium text-slate-700">
+              <label htmlFor="password" className="block text-sm font-medium text-blue-700">
                 Password
               </label>
               <input
@@ -71,7 +71,7 @@ export default function LoginPage() {
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="mt-1 block w-full px-3 py-2 border border-slate-300 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
+                className="mt-1 block w-full px-3 py-2 border border-blue-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
               />
             </div>
           </div>
@@ -79,14 +79,14 @@ export default function LoginPage() {
           <button
             type="submit"
             disabled={isLoading}
-            className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50"
+            className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
           >
             {isLoading ? 'Signing in...' : 'Sign in'}
           </button>
 
-          <p className="text-center text-sm text-slate-600">
+          <p className="text-center text-sm text-blue-600">
             Don't have an account?{' '}
-            <Link to="/register" className="text-primary-600 hover:text-primary-500">
+            <Link to="/register" className="text-blue-600 hover:text-blue-500">
               Register
             </Link>
           </p>

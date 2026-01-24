@@ -1,31 +1,53 @@
-import { useState, useEffect } from 'react';
+import { useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
 import { useResearch } from '../hooks/useResearch';
 import { useResearchStore } from '../stores/researchStore';
 import Sidebar from './Sidebar/Sidebar';
 import ChatContainer from './Chat/ChatContainer';
+import PlanConfirmationModal from './Chat/PlanConfirmationModal';
 
 export default function ResearchPage() {
   const { runId } = useParams<{ runId: string }>();
   const navigate = useNavigate();
   const { user, logout } = useAuth();
-  const { fetchRuns, runs, createRun } = useResearchStore();
+  const {
+    fetchRuns,
+    runs,
+    createRun,
+    showPlanConfirmationModal,
+    confirmPlan,
+    rejectPlan,
+    closePlanConfirmationModal,
+    plan,
+  } = useResearchStore();
   const research = useResearch(runId || null);
-  const [newRunTitle, setNewRunTitle] = useState('');
-  const [showNewRunForm, setShowNewRunForm] = useState(false);
 
   useEffect(() => {
     fetchRuns();
   }, []);
 
   const handleCreateRun = async () => {
-    if (!newRunTitle.trim()) return;
+    // Generate default name with sequential counter (gaps filled)
+    const baseName = "New Chat";
+    const getNextName = () => {
+      // Find all existing "New Chat" and "New Chat (N)" names
+      const usedNumbers = new Set<number>();
+      runs.forEach(r => {
+        if (r.title === baseName) usedNumbers.add(1);
+        const match = r.title.match(/^New Chat \((\d+)\)$/);
+        if (match) usedNumbers.add(parseInt(match[1]));
+      });
+
+      // Find first available number
+      if (!usedNumbers.has(1)) return baseName;
+      for (let i = 2; ; i++) {
+        if (!usedNumbers.has(i)) return `${baseName} (${i})`;
+      }
+    };
 
     try {
-      const run = await createRun(newRunTitle);
-      setNewRunTitle('');
-      setShowNewRunForm(false);
+      const run = await createRun(getNextName());
       navigate(`/run/${run.id}`);
     } catch {
       // Error handled by store
@@ -45,41 +67,14 @@ export default function ResearchPage() {
           <p className="text-sm text-slate-500 dark:text-slate-400">Welcome, {user?.username}</p>
         </div>
 
-        {/* New Run Button/Form */}
+        {/* New Run Button */}
         <div className="p-4 border-b border-slate-200 dark:border-slate-800">
-          {showNewRunForm ? (
-            <div className="space-y-2">
-              <input
-                type="text"
-                value={newRunTitle}
-                onChange={(e) => setNewRunTitle(e.target.value)}
-                placeholder="Research topic..."
-                className="w-full px-3 py-2 border border-slate-300 dark:border-slate-600 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100"
-                onKeyDown={(e) => e.key === 'Enter' && handleCreateRun()}
-              />
-              <div className="flex gap-2">
-                <button
-                  onClick={handleCreateRun}
-                  className="flex-1 px-3 py-1.5 bg-primary-600 text-white rounded-md text-sm hover:bg-primary-700"
-                >
-                  Create
-                </button>
-                <button
-                  onClick={() => setShowNewRunForm(false)}
-                  className="px-3 py-1.5 border border-slate-300 dark:border-slate-600 rounded-md text-sm hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          ) : (
-            <button
-              onClick={() => setShowNewRunForm(true)}
-              className="w-full px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
-            >
-              + New Research
-            </button>
-          )}
+          <button
+            onClick={handleCreateRun}
+            className="w-full px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700"
+          >
+            + New Research
+          </button>
         </div>
 
         {/* Sidebar Content */}
@@ -114,7 +109,6 @@ export default function ResearchPage() {
             isRunning={research.isRunning}
             phase={research.phase}
             onSendMessage={research.sendMessage}
-            onStart={() => research.startResearch()}
             onPause={research.pauseResearch}
             searchThemes={research.searchThemes}
             error={research.error}
@@ -131,6 +125,16 @@ export default function ResearchPage() {
           </div>
         )}
       </div>
+
+      {/* Plan Confirmation Modal */}
+      {showPlanConfirmationModal && (
+        <PlanConfirmationModal
+          plan={plan}
+          onConfirm={confirmPlan}
+          onReject={rejectPlan}
+          onCancel={closePlanConfirmationModal}
+        />
+      )}
     </div>
   );
 }

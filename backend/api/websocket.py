@@ -159,6 +159,7 @@ class WSEventType:
     APPROVAL_NEEDED = "approval_needed"
     APPROVAL_RESPONSE = "approval_response"
     QUESTION = "question"
+    PLAN_CONFIRMATION_NEEDED = "plan_confirmation_needed"
 
     # Status
     RUN_START = "run_start"

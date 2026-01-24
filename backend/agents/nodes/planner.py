@@ -76,18 +76,42 @@ async def planner_node(
 
     Outputs:
         - Updates state.plan with PlanStep objects
-        - Sets phase to "identifying_themes"
-        - Routes to identify_themes node
+        - Sets phase to "awaiting_confirmation"
+        - Routes to identify_themes node (after user confirms)
     """
     logger.info(f"Planner node starting for run {state['run_id']}")
 
     llm = get_llm(temperature=0.0)
 
+    # Check if there's user feedback from a previous rejection
+    user_feedback = state.get("user_response")
+    previous_plan = state.get("plan", [])
+
     # Build messages
-    messages = [
-        SystemMessage(content=PLANNER_PROMPT),
-        HumanMessage(content=state["original_query"]),
-    ]
+    if user_feedback and previous_plan:
+        # Re-planning based on user feedback
+        logger.info(f"Re-planning with user feedback: {user_feedback[:100]}...")
+        previous_plan_text = "\n".join(
+            f"{i+1}. {step['description']}" for i, step in enumerate(previous_plan)
+        )
+        messages = [
+            SystemMessage(content=PLANNER_PROMPT),
+            HumanMessage(content=f"""Original query: {state["original_query"]}
+
+Previous plan that was rejected:
+{previous_plan_text}
+
+User feedback for improvement:
+{user_feedback}
+
+Please create an improved research plan that addresses the user's feedback."""),
+        ]
+    else:
+        # Initial planning
+        messages = [
+            SystemMessage(content=PLANNER_PROMPT),
+            HumanMessage(content=state["original_query"]),
+        ]
 
     # Invoke LLM
     response = await llm.ainvoke(messages)
@@ -117,8 +141,9 @@ async def planner_node(
     return Command(
         update={
             "plan": plan,
-            "phase": "identifying_themes",
+            "phase": "awaiting_confirmation",
             "current_step_index": 0,
+            "user_response": None,  # Clear user feedback after using it
             "messages": [
                 HumanMessage(content=state["original_query"]),
                 response,

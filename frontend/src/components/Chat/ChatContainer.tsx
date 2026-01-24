@@ -2,14 +2,13 @@ import { useState, useRef, useEffect } from 'react';
 import { Message } from '../../types';
 import MessageList from './MessageList';
 import MessageInput from './MessageInput';
-import { Loader2, Play, Pause, AlertCircle, Search } from 'lucide-react';
+import { Loader2, Pause, AlertCircle, Search } from 'lucide-react';
 
 interface ChatContainerProps {
   messages: Message[];
   isRunning: boolean;
   phase: string;
   onSendMessage: (message: string) => void;
-  onStart: () => void;
   onPause: () => void;
   searchThemes: string[];
   error: string | null;
@@ -21,7 +20,6 @@ export default function ChatContainer({
   isRunning,
   phase,
   onSendMessage,
-  onStart,
   onPause,
   searchThemes,
   error,
@@ -41,8 +39,7 @@ export default function ChatContainer({
     setInputValue('');
   };
 
-  const canSend = !isRunning || phase === 'paused';
-  const showStartButton = messages.length === 0 || phase === 'paused';
+  const canSend = !isRunning || phase === 'paused' || phase === 'idle';
 
   return (
     <div className="flex-1 flex flex-col bg-slate-50 dark:bg-slate-950">
@@ -58,7 +55,7 @@ export default function ChatContainer({
           )}
         </div>
         <div className="flex items-center gap-2">
-          {isRunning ? (
+          {isRunning && (
             <button
               onClick={onPause}
               className="flex items-center gap-2 px-4 py-2 text-sm bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-300 rounded-md hover:bg-yellow-200 dark:hover:bg-yellow-900/50"
@@ -66,15 +63,7 @@ export default function ChatContainer({
               <Pause className="w-4 h-4" />
               Pause
             </button>
-          ) : showStartButton ? (
-            <button
-              onClick={onStart}
-              className="flex items-center gap-2 px-4 py-2 text-sm bg-primary-600 text-white rounded-md hover:bg-primary-700"
-            >
-              <Play className="w-4 h-4" />
-              {messages.length === 0 ? 'Start Research' : 'Resume'}
-            </button>
-          ) : null}
+          )}
         </div>
       </div>
 
@@ -121,9 +110,9 @@ export default function ChatContainer({
         {messages.length === 0 ? (
           <div className="flex items-center justify-center h-full text-slate-500 dark:text-slate-400">
             <div className="text-center">
-              <p className="text-lg">Ready to research</p>
+              <p className="text-lg">What would you like to research?</p>
               <p className="text-sm mt-2">
-                Click "Start Research" to begin
+                Type your research query below to begin
               </p>
             </div>
           </div>
@@ -142,7 +131,9 @@ export default function ChatContainer({
         placeholder={
           isRunning
             ? 'Research in progress...'
-            : 'Type a message or question...'
+            : messages.length === 0
+              ? 'Enter your research query...'
+              : 'Type a message or question...'
         }
       />
     </div>

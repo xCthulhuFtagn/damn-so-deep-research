@@ -39,6 +39,22 @@ def merge_findings(existing: list[str], new: list[str]) -> list[str]:
     return existing + new
 
 
+def add_or_reset_count(existing: int, new: int) -> int:
+    """
+    Reducer for count updates that can be reset or incremented.
+
+    - If new == 0, resets the count to 0 (used before parallel operations)
+    - If new > 0, adds to existing count (used by parallel nodes)
+    - Negative values are treated as absolute reset to |new|
+    """
+    if new == 0:
+        return 0  # Reset
+    elif new < 0:
+        return abs(new)  # Absolute set
+    else:
+        return existing + new  # Increment
+
+
 class ResearchState(TypedDict):
     """
     Main state schema for the research graph.
@@ -57,6 +73,7 @@ class ResearchState(TypedDict):
     # --- Execution Phase Tracking ---
     phase: Literal[
         "planning",
+        "awaiting_confirmation",
         "identifying_themes",
         "searching",
         "evaluating",
@@ -72,7 +89,7 @@ class ResearchState(TypedDict):
     step_findings: Annotated[list[str], merge_findings]  # Collected findings for current step
 
     # --- Step Execution Tracking ---
-    step_search_count: int  # Searches performed in current step
+    step_search_count: Annotated[int, add_or_reset_count]  # Searches performed in current step
     max_searches_per_step: int  # Limit (default 3)
 
     # --- Human-in-the-Loop ---

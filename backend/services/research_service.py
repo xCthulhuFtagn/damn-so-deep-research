@@ -88,8 +88,23 @@ class ResearchService:
                 # Process event and send notifications
                 await self._process_graph_event(run_id, event)
 
-            # Get final state
+            # Get final state to check if graph is interrupted or completed
             final_state = await graph.aget_state(config)
+
+            # Check if graph is waiting for input (interrupted)
+            if final_state and final_state.next:
+                # Graph is interrupted, waiting for user input
+                logger.info(f"Graph interrupted for run {run_id}, waiting for user input")
+                phase = final_state.values.get("phase", "")
+
+                # If awaiting confirmation, send the plan confirmation event
+                if phase == "awaiting_confirmation":
+                    plan = final_state.values.get("plan", [])
+                    # Convert PlanStep TypedDicts to regular dicts for JSON serialization
+                    plan_dicts = [dict(step) for step in plan]
+                    await notification.notify_plan_confirmation_needed(run_id, plan_dicts)
+                    await db.update_run(run_id, status="awaiting_confirmation")
+                return
 
             # Extract report from messages
             report = None
@@ -131,11 +146,19 @@ class ResearchService:
 
             # Notify phase changes
             if "phase" in node_output:
+                phase = node_output["phase"]
                 await notification.notify_phase_change(
                     run_id,
-                    node_output["phase"],
+                    phase,
                     node_output.get("current_step_index"),
                 )
+
+                # If phase is awaiting_confirmation, send plan confirmation needed event
+                if phase == "awaiting_confirmation" and "plan" in node_output:
+                    await notification.notify_plan_confirmation_needed(
+                        run_id,
+                        node_output["plan"],
+                    )
 
             # Notify step starts
             if node_name == "identify_themes":
@@ -177,7 +200,7 @@ class ResearchService:
         user_input: str,
     ) -> None:
         """Resume a paused research with user input."""
-        logger.info(f"Resuming run {run_id} with input")
+        logger.info(f"Resuming run {run_id} with input: {user_input[:50]}...")
 
         notification = get_notification_service()
         db = await get_db_service()
@@ -198,11 +221,49 @@ class ResearchService:
                 logger.error(f"No state found for run {run_id}")
                 return
 
-            # Update state with user input
-            await graph.aupdate_state(
-                config,
-                {"user_response": user_input},
-            )
+            # Check if this is a plan rejection - need to re-plan
+            is_rejection = user_input.lower().startswith("reject:")
+
+            if is_rejection:
+                # Extract feedback from rejection
+                feedback = user_input[7:].strip()  # Remove "reject:" prefix
+                logger.info(f"Plan rejected for run {run_id}, feedback: {feedback}")
+
+                # Update state with feedback and reset to planning phase
+                await graph.aupdate_state(
+                    config,
+                    {
+                        "user_response": feedback,
+                        "phase": "planning",
+                        "plan": [],  # Clear old plan
+                    },
+                    as_node="planner",  # Update as if from planner node
+                )
+
+                # Notify user of re-planning
+                await notification.notify_phase_change(run_id, "planning")
+                await notification.notify_message(
+                    run_id,
+                    "assistant",
+                    f"Regenerating plan based on your feedback: {feedback}",
+                    name="System",
+                )
+            else:
+                # Normal approval - just update user_response
+                # Strip "approve:" prefix if present
+                response = user_input
+                if user_input.lower().startswith("approve:"):
+                    response = user_input[8:].strip()
+                elif user_input.lower() == "approve":
+                    response = ""
+
+                await graph.aupdate_state(
+                    config,
+                    {
+                        "user_response": response,
+                        "phase": "identifying_themes",  # Move to next phase
+                    },
+                )
 
             # Resume execution
             await db.update_run(run_id, status="active")
@@ -214,6 +275,18 @@ class ResearchService:
                     return
 
                 await self._process_graph_event(run_id, event)
+
+            # Check if graph is interrupted again
+            final_state = await graph.aget_state(config)
+            if final_state and final_state.next:
+                logger.info(f"Graph interrupted again for run {run_id}")
+                phase = final_state.values.get("phase", "")
+                if phase == "awaiting_confirmation":
+                    plan = final_state.values.get("plan", [])
+                    plan_dicts = [dict(step) for step in plan]
+                    await notification.notify_plan_confirmation_needed(run_id, plan_dicts)
+                    await db.update_run(run_id, status="awaiting_confirmation")
+                return
 
             await db.update_run(run_id, status="completed")
             await notification.notify_run_complete(run_id)
