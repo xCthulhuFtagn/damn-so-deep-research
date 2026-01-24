@@ -34,9 +34,9 @@ def merge_search_results(
     return existing + new
 
 
-def merge_findings(existing: list[str], new: list[str]) -> list[str]:
-    """Reducer for merging step findings."""
-    return existing + new
+def replace_findings(existing: list[str], new: list[str]) -> list[str]:
+    """Reducer for findings - last write wins to prevent accumulation across steps."""
+    return new
 
 
 def add_or_reset_count(existing: int, new: int) -> int:
@@ -111,7 +111,7 @@ class ResearchState(TypedDict):
     # --- Parallel Search Context ---
     search_themes: Annotated[list[str], last_value]  # Themes to search in parallel
     parallel_search_results: Annotated[list[SearchResult], merge_search_results]
-    step_findings: Annotated[list[str], merge_findings]  # Collected findings for current step
+    step_findings: Annotated[list[str], replace_findings]  # Collected findings for current step
 
     # --- Step Execution Tracking ---
     step_search_count: Annotated[int, add_or_reset_count]  # Searches performed in current step

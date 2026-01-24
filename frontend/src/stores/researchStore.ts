@@ -273,6 +273,10 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
         }));
         break;
 
+      case 'plan_update':
+        set({ plan: event.plan as PlanStep[] });
+        break;
+
       case 'step_start':
         set({ currentStepIndex: event.step_index as number });
         break;

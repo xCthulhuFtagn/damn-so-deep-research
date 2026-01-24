@@ -1,5 +1,6 @@
 import { Message } from '../../types';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { clsx } from 'clsx';
 import { User, Bot, Wrench } from 'lucide-react';
 
@@ -72,7 +73,7 @@ export default function MessageList({ messages }: MessageListProps) {
                 </span>
               </div>
               <div className="prose prose-sm prose-slate dark:prose-invert max-w-none markdown-content">
-                <ReactMarkdown>{message.content}</ReactMarkdown>
+                <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.content}</ReactMarkdown>
               </div>
             </div>
           </div>

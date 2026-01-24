@@ -154,6 +154,7 @@ class WSEventType:
     SEARCH_START = "search_start"
     SEARCH_COMPLETE = "search_complete"
     SEARCH_PARALLEL = "search_parallel"
+    PLAN_UPDATE = "plan_update"
 
     # Human-in-the-loop
     APPROVAL_NEEDED = "approval_needed"

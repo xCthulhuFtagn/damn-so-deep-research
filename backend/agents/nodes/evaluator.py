@@ -29,11 +29,14 @@ EVALUATION CRITERIA:
 1. Are the findings relevant to the task?
 2. Do they provide actionable or useful information?
 3. Are there enough details to include in a research report?
+4. Partial information or strong context is better than nothing.
 
 YOUR DECISION OPTIONS:
-1. APPROVE - Findings are sufficient. Provide a concise summary of the key insights.
-2. FAIL - Findings are completely inadequate or missing. This is a critical failure.
+1. APPROVE - Findings are sufficient OR provide useful context/partial answers.
+2. FAIL - Findings are completely irrelevant, empty, or totally off-topic.
 3. SKIP - Findings are not great but the task is not critical. We can move on.
+
+IMPORTANT: If the findings provide useful context or partial answers (e.g., laws, general statistics, background) but miss specific details (e.g., specific names, exact case numbers), choose APPROVE. Do not block progress unless the findings are totally useless.
 
 OUTPUT FORMAT:
 First line: DECISION: [APPROVE/FAIL/SKIP]
@@ -105,8 +108,12 @@ async def evaluator_node(
             goto="reporter",
         )
 
+    logger.info(f"Evaluating step: {current_step['description']}")
+
     # Build findings text
     findings_text = "\n\n".join(findings) if findings else "No findings collected."
+
+    logger.info(f"Evaluator processing findings (first 2000 chars): {findings_text[:2000]}...")
 
     # Evaluate
     llm = get_llm(temperature=0.0)

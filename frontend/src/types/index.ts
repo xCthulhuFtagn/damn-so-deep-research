@@ -86,6 +86,7 @@ export type WSEventType =
   | 'approval_response'
   | 'question'
   | 'plan_confirmation_needed'
+  | 'plan_update'
   | 'run_start'
   | 'run_complete'
   | 'run_error'
@@ -128,6 +129,11 @@ export interface SearchParallelEvent extends WSEvent {
   type: 'search_parallel';
   themes: string[];
   count: number;
+}
+
+export interface PlanUpdateEvent extends WSEvent {
+  type: 'plan_update';
+  plan: PlanStep[];
 }
 
 export interface RunCompleteEvent extends WSEvent {

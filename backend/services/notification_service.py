@@ -113,6 +113,20 @@ class NotificationService:
             ),
         )
 
+    async def notify_plan_update(
+        self,
+        run_id: str,
+        plan: list,
+    ) -> None:
+        """Notify clients of a full plan update."""
+        await self.manager.broadcast(
+            run_id,
+            create_ws_event(
+                WSEventType.PLAN_UPDATE,
+                plan=plan,
+            ),
+        )
+
     async def notify_search_parallel(
         self,
         run_id: str,

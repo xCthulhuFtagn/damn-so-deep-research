@@ -106,20 +106,11 @@ class ResearchService:
                     await db.update_run(run_id, status="awaiting_confirmation")
                 return
 
-            # Extract report from messages
-            report = None
-            if final_state and final_state.values:
-                messages = final_state.values.get("messages", [])
-                for msg in reversed(messages):
-                    if hasattr(msg, "name") and msg.name == "Reporter":
-                        report = msg.content
-                        break
-
             # Update run status
             await db.update_run(run_id, status="completed")
 
             # Notify completion
-            await notification.notify_run_complete(run_id, report=report)
+            await notification.notify_run_complete(run_id)
 
             logger.info(f"Research completed for run {run_id}")
 
@@ -144,7 +135,15 @@ class ResearchService:
             if not isinstance(node_output, dict):
                 continue
 
+            # Notify plan updates
+            if "plan" in node_output:
+                plan = node_output["plan"]
+                # Convert TypedDicts to regular dicts if needed
+                plan_dicts = [dict(step) if hasattr(step, "_asdict") else dict(step) for step in plan]
+                await notification.notify_plan_update(run_id, plan_dicts)
+
             # Notify phase changes
+
             if "phase" in node_output:
                 phase = node_output["phase"]
                 await notification.notify_phase_change(
@@ -288,17 +287,8 @@ class ResearchService:
                     await db.update_run(run_id, status="awaiting_confirmation")
                 return
 
-            # Extract report from messages (same as execute_research)
-            report = None
-            if final_state and final_state.values:
-                messages = final_state.values.get("messages", [])
-                for msg in reversed(messages):
-                    if hasattr(msg, "name") and msg.name == "Reporter":
-                        report = msg.content
-                        break
-
             await db.update_run(run_id, status="completed")
-            await notification.notify_run_complete(run_id, report=report)
+            await notification.notify_run_complete(run_id)
             logger.info(f"Research completed for run {run_id}")
 
         except Exception as e:

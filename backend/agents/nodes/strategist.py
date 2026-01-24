@@ -32,24 +32,32 @@ ERROR/REASON:
 COMPLETED STEPS SO FAR:
 {completed_steps}
 
+SYSTEM CAPABILITIES:
+- The system ONLY has access to a web search tool (Firecrawl).
+- It CANNOT download PDF files, access local libraries, or browse physical archives.
+- It CANNOT execute arbitrary code or local file operations.
+- It can only read text content available directly on web pages.
+
 YOUR TASK:
 Create 1-3 corrective steps that will help recover from this failure.
 These steps should:
-1. Try alternative approaches to get the needed information
-2. Break down the failed task into smaller, more specific queries
-3. Consider alternative sources or methods
+1. Try alternative search queries to get the needed information.
+2. Break down the failed task into smaller, more specific queries.
+3. Look for summaries, excerpts, or analyses if full texts are not available.
 
 NAMING CONVENTION:
-Each corrective step MUST be named: "Recovery: [specific action to take]"
+Each corrective step MUST be named: "Recovery: [specific search-focused action]"
 
 OUTPUT FORMAT:
 Output each corrective step on a separate line:
-1. Recovery: [first corrective action]
-2. Recovery: [second corrective action]
+1. Recovery: [first corrective search action]
+2. Recovery: [second corrective search action]
 
 FORBIDDEN:
-- Do NOT add reporting or summarization steps
-- Do NOT repeat the exact same failed task"""
+- Do NOT suggest "Download PDF" or "Save file".
+- Do NOT suggest "Search locally" or "Check local database".
+- Do NOT repeat the exact same failed task.
+- Do NOT add reporting or summarization steps."""
 
 
 def parse_corrective_steps(content: str) -> list[str]:

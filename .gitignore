@@ -28,6 +28,7 @@ db/
 .cursor/
 .idea/
 .vscode/
+.claude/
 *.swp
 *.swo
 
@@ -35,9 +36,10 @@ db/
 _legacy/
 
 # Node
-frontend/node_modules/
+**/node_modules/
 frontend/dist/
 frontend/.cache/
+frontend/coverage/
 
 # OS
 .DS_Store
