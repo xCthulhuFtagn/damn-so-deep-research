@@ -10,7 +10,7 @@ from typing import Literal
 from langchain_core.messages import AIMessage, SystemMessage
 from langgraph.types import Command
 
-from backend.agents.state import ResearchState
+from backend.agents.state import ResearchState, Substep
 from backend.core.llm import get_llm
 
 logger = logging.getLogger(__name__)
@@ -135,11 +135,16 @@ async def evaluator_node(
     updated_plan = plan.copy()
 
     if decision == "APPROVE":
+        # Combine accumulated findings with current findings
+        existing_accumulated = current_step.get("accumulated_findings", [])
+        all_findings = existing_accumulated + findings
+
         # Mark step as done with result
         updated_plan[current_idx] = {
             **current_step,
             "status": "DONE",
             "result": reasoning,
+            "accumulated_findings": all_findings,
         }
 
         # Check if more steps
@@ -164,21 +169,83 @@ async def evaluator_node(
             )
 
     elif decision == "FAIL":
-        # Mark as failed, route to strategist
-        updated_plan[current_idx] = {
-            **current_step,
-            "status": "FAILED",
-            "error": reasoning,
-        }
-        return Command(
-            update={
-                "plan": updated_plan,
-                "failed_step_id": current_idx,
-                "last_error": reasoning,
-                "phase": "recovering",
-            },
-            goto="strategist",
+        # Per-step recovery with substeps
+        substep_idx = current_step.get("current_substep_index", 0)
+        max_substeps = current_step.get("max_substeps", 3)
+        existing_substeps = current_step.get("substeps", [])
+        existing_accumulated = current_step.get("accumulated_findings", [])
+
+        # Record this attempt as a failed substep
+        new_substep = Substep(
+            id=substep_idx,
+            search_queries=state.get("search_themes", []),
+            findings=findings,  # May have partial findings
+            status="FAILED",
+            error=reasoning,
         )
+
+        # Accumulate any partial findings
+        accumulated = existing_accumulated + findings
+
+        logger.info(
+            f"Substep {substep_idx + 1}/{max_substeps} failed. "
+            f"Accumulated findings: {len(accumulated)}"
+        )
+
+        if substep_idx + 1 < max_substeps:
+            # Still have recovery budget - route to strategist
+            updated_plan[current_idx] = {
+                **current_step,
+                "status": "IN_PROGRESS",
+                "substeps": existing_substeps + [new_substep],
+                "current_substep_index": substep_idx + 1,
+                "accumulated_findings": accumulated,
+            }
+
+            return Command(
+                update={
+                    "plan": updated_plan,
+                    "last_error": reasoning,
+                    "phase": "recovering",
+                },
+                goto="strategist",
+            )
+        else:
+            # Budget exhausted - mark step as FAILED and move on
+            logger.warning(
+                f"All {max_substeps} substeps exhausted for step {current_idx}. "
+                f"Marking as FAILED."
+            )
+
+            updated_plan[current_idx] = {
+                **current_step,
+                "status": "FAILED",
+                "error": f"All {max_substeps} attempts failed. Last: {reasoning}",
+                "substeps": existing_substeps + [new_substep],
+                "current_substep_index": substep_idx + 1,
+                "accumulated_findings": accumulated,
+            }
+
+            # Check if more steps remain
+            remaining = [s for s in updated_plan if s["status"] == "TODO"]
+            if remaining:
+                return Command(
+                    update={
+                        "plan": updated_plan,
+                        "current_step_index": current_idx + 1,
+                        "phase": "identifying_themes",
+                        "step_findings": [],
+                    },
+                    goto="identify_themes",
+                )
+            else:
+                return Command(
+                    update={
+                        "plan": updated_plan,
+                        "phase": "reporting",
+                    },
+                    goto="reporter",
+                )
 
     else:  # SKIP
         # Mark as skipped, move on

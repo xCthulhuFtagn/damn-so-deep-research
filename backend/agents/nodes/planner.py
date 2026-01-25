@@ -11,7 +11,7 @@ from typing import Literal
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.types import Command
 
-from backend.agents.state import PlanStep, ResearchState
+from backend.agents.state import ResearchState, create_plan_step
 from backend.core.llm import get_llm
 
 logger = logging.getLogger(__name__)
@@ -124,15 +124,9 @@ Please create an improved research plan that addresses the user's feedback."""),
         logger.warning("No steps parsed from planner response, using fallback")
         step_descriptions = [f"Research: {state['original_query']}"]
 
-    # Create PlanStep objects
+    # Create PlanStep objects with substep support
     plan = [
-        PlanStep(
-            id=i,
-            description=desc,
-            status="TODO",
-            result=None,
-            error=None,
-        )
+        create_plan_step(id=i, description=desc)
         for i, desc in enumerate(step_descriptions)
     ]
 

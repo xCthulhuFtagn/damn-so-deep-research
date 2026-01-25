@@ -99,7 +99,7 @@ async def merge_results_node(state: ResearchState) -> dict:
 
     return {
         "step_findings": merged_findings,
-        "parallel_search_results": [],  # Clear for next step
+        "parallel_search_results": None,  # Reset signal - clears accumulated results
         "search_themes": [],  # Clear themes
         "phase": "evaluating",
     }

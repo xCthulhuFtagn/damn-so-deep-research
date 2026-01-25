@@ -1,7 +1,8 @@
 """
-Strategist node - recovery from failed steps.
+Strategist node - recovery from failed substeps.
 
-Analyzes failures and inserts corrective steps into the plan.
+Generates alternative search queries based on previous failed attempts.
+Does NOT create new plan steps - works within the current step's substep budget.
 """
 
 import logging
@@ -11,185 +12,165 @@ from typing import Literal
 from langchain_core.messages import SystemMessage
 from langgraph.types import Command
 
-from backend.agents.state import PlanStep, ResearchState
+from backend.agents.state import ResearchState
 from backend.core.llm import get_llm
 
 logger = logging.getLogger(__name__)
 
 STRATEGIST_PROMPT = """You are a Recovery Strategist for a research system.
 
-A research step has FAILED. Your job is to create corrective steps to recover.
+A research SUBSTEP has failed. Your job is to suggest ALTERNATIVE SEARCH QUERIES.
 
-ORIGINAL QUERY:
+ORIGINAL RESEARCH QUERY:
 {original_query}
 
-FAILED STEP:
-{failed_step}
+CURRENT STEP:
+{step_description}
 
-ERROR/REASON:
+SUBSTEP ATTEMPT #{substep_number} FAILED:
 {error}
 
-COMPLETED STEPS SO FAR:
-{completed_steps}
+PREVIOUS ATTEMPTS:
+{previous_attempts}
 
-SYSTEM CAPABILITIES:
-- The system ONLY has access to a web search tool (Firecrawl).
-- It CANNOT download PDF files, access local libraries, or browse physical archives.
-- It CANNOT execute arbitrary code or local file operations.
-- It can only read text content available directly on web pages.
+PARTIAL FINDINGS COLLECTED:
+{partial_findings}
 
 YOUR TASK:
-Create 1-3 corrective steps that will help recover from this failure.
-These steps should:
-1. Try alternative search queries to get the needed information.
-2. Break down the failed task into smaller, more specific queries.
-3. Look for summaries, excerpts, or analyses if full texts are not available.
+Generate 1-3 ALTERNATIVE search queries that approach the problem differently.
 
-NAMING CONVENTION:
-Each corrective step MUST be named: "Recovery: [specific search-focused action]"
+STRATEGIES TO TRY:
+1. More specific terminology or jargon
+2. Different phrasing / synonyms
+3. Narrower scope (if previous was too broad)
+4. Broader scope (if previous was too narrow)
+5. Alternative sources (academic papers, news, official documents)
+6. Related topics that might contain the answer
 
 OUTPUT FORMAT:
-Output each corrective step on a separate line:
-1. Recovery: [first corrective search action]
-2. Recovery: [second corrective search action]
+SEARCH: [alternative query 1]
+SEARCH: [alternative query 2]
+SEARCH: [alternative query 3]
 
-FORBIDDEN:
-- Do NOT suggest "Download PDF" or "Save file".
-- Do NOT suggest "Search locally" or "Check local database".
-- Do NOT repeat the exact same failed task.
-- Do NOT add reporting or summarization steps."""
+RULES:
+- Do NOT repeat previous failed queries
+- Each query should try a distinctly different approach
+- Be specific and actionable"""
 
 
-def parse_corrective_steps(content: str) -> list[str]:
-    """Parse corrective steps from strategist response."""
-    steps = []
+def parse_search_queries(content: str) -> list[str]:
+    """Parse search queries from strategist response."""
+    queries = []
     for line in content.strip().split("\n"):
         line = line.strip()
         if not line:
             continue
 
-        # Match numbered format
+        # Match "SEARCH: query" format
+        if line.upper().startswith("SEARCH:"):
+            query = line[7:].strip()
+            if query:
+                queries.append(query)
+            continue
+
+        # Match numbered format: "1. query"
         match = re.match(r"^\d+[\.\)]\s*(.+)$", line)
         if match:
-            steps.append(match.group(1).strip())
+            queries.append(match.group(1).strip())
             continue
 
-        # Match bullet format
+        # Match bullet format: "- query"
         match = re.match(r"^[\-\*]\s*(.+)$", line)
         if match:
-            steps.append(match.group(1).strip())
-            continue
+            queries.append(match.group(1).strip())
 
-        # Match lines starting with "Recovery:"
-        if line.lower().startswith("recovery:"):
-            steps.append(line)
-
-    return steps
+    return queries
 
 
 async def strategist_node(
     state: ResearchState,
 ) -> Command[Literal["identify_themes", "reporter"]]:
     """
-    Recovery strategist - creates corrective steps after failure.
+    Recovery strategist - generates alternative search queries.
 
-    Inserts new steps after the failed step and routes back to execution.
+    Does NOT create new plan steps. Instead:
+    - Analyzes previous failed substeps
+    - Generates new search themes for retry
+    - Routes back to identify_themes with context for the SAME step
     """
     run_id = state["run_id"]
     plan = state["plan"]
-    failed_idx = state.get("failed_step_id")
+    current_idx = state["current_step_index"]
     error = state.get("last_error", "Unknown error")
-    recovery_attempts = state.get("recovery_attempts", 0)
 
-    logger.info(f"Strategist for run {run_id}, failed step {failed_idx}")
+    logger.info(f"Strategist for run {run_id}, step {current_idx}")
 
-    # Limit recovery attempts
-    if recovery_attempts >= 2:
-        logger.warning("Max recovery attempts reached, moving to reporter")
-        return Command(
-            update={
-                "phase": "reporting",
-                "recovery_attempts": 0,
-            },
-            goto="reporter",
-        )
-
-    if failed_idx is None or failed_idx >= len(plan):
-        logger.warning("Invalid failed step index")
+    if current_idx >= len(plan):
+        logger.warning("Invalid step index, moving to reporter")
         return Command(
             update={"phase": "reporting"},
             goto="reporter",
         )
 
-    failed_step = plan[failed_idx]
+    current_step = plan[current_idx]
+    substeps = current_step.get("substeps", [])
+    substep_idx = current_step.get("current_substep_index", 0)
+    accumulated = current_step.get("accumulated_findings", [])
 
-    # Build context
-    completed = [
-        f"- {s['description']}: {s.get('result', 'No result')[:100]}"
-        for s in plan
-        if s["status"] == "DONE"
-    ]
-    completed_text = "\n".join(completed) if completed else "None"
+    # Build context from previous attempts
+    if substeps:
+        prev_attempts = []
+        for s in substeps:
+            queries_str = ", ".join(s.get("search_queries", []))
+            prev_attempts.append(
+                f"  Attempt {s['id'] + 1}: queries=[{queries_str}], error={s.get('error', 'N/A')[:100]}"
+            )
+        previous_attempts_text = "\n".join(prev_attempts)
+    else:
+        previous_attempts_text = "None (first attempt)"
 
-    # Generate corrective steps
-    llm = get_llm(temperature=0.3)  # Slight creativity for alternatives
+    partial_text = (
+        "\n".join(accumulated[:5]) if accumulated else "No partial findings yet"
+    )
+
+    # Generate alternative queries
+    llm = get_llm(temperature=0.5)  # Higher creativity for alternatives
     messages = [
         SystemMessage(
             content=STRATEGIST_PROMPT.format(
                 original_query=state["original_query"],
-                failed_step=failed_step["description"],
+                step_description=current_step["description"],
+                substep_number=substep_idx,
                 error=error,
-                completed_steps=completed_text,
+                previous_attempts=previous_attempts_text,
+                partial_findings=partial_text,
             )
         ),
     ]
 
     response = await llm.ainvoke(messages)
-    corrective_steps = parse_corrective_steps(response.content)
+    alternative_queries = parse_search_queries(response.content)
 
-    if not corrective_steps:
-        # Fallback: simple retry with modified query
-        corrective_steps = [
-            f"Recovery: Alternative search for {failed_step['description']}"
+    if not alternative_queries:
+        # Fallback: reformulate the original step description
+        alternative_queries = [
+            f"{current_step['description']} overview",
+            f"{current_step['description']} examples",
         ]
 
-    logger.info(f"Generated {len(corrective_steps)} corrective steps")
+    # Limit to 3 queries
+    alternative_queries = alternative_queries[:3]
 
-    # Insert corrective steps into plan after failed step
-    updated_plan = plan.copy()
+    logger.info(f"Generated {len(alternative_queries)} alternative queries for retry")
 
-    # Find the highest existing ID
-    max_id = max(s["id"] for s in plan) if plan else -1
-
-    # Create new PlanStep objects
-    new_steps = [
-        PlanStep(
-            id=max_id + i + 1,
-            description=desc,
-            status="TODO",
-            result=None,
-            error=None,
-        )
-        for i, desc in enumerate(corrective_steps)
-    ]
-
-    # Insert after failed step
-    insert_pos = failed_idx + 1
-    updated_plan = (
-        updated_plan[:insert_pos] + new_steps + updated_plan[insert_pos:]
-    )
-
-    logger.info(f"Plan updated: {len(updated_plan)} total steps")
-
+    # Route back to identify_themes with new search themes
+    # identify_themes will use these directly since step is IN_PROGRESS
     return Command(
         update={
-            "plan": updated_plan,
-            "current_step_index": insert_pos,  # Start from first corrective step
-            "phase": "identifying_themes",
-            "failed_step_id": None,
+            "search_themes": alternative_queries,
+            "phase": "searching",
+            "step_findings": [],  # Clear for new attempt
             "last_error": None,
-            "recovery_attempts": recovery_attempts + 1,
-            "step_findings": [],
         },
         goto="identify_themes",
     )

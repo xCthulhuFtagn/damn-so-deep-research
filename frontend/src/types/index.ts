@@ -26,12 +26,25 @@ export interface RunListResponse {
 }
 
 // Plan types
+export interface Substep {
+  id: number;
+  search_queries: string[];
+  findings: string[];
+  status: 'DONE' | 'FAILED';
+  error?: string;
+}
+
 export interface PlanStep {
   id: number;
   description: string;
   status: 'TODO' | 'IN_PROGRESS' | 'DONE' | 'FAILED' | 'SKIPPED';
   result?: string;
   error?: string;
+  // Per-step recovery
+  substeps?: Substep[];
+  current_substep_index?: number;
+  max_substeps?: number;
+  accumulated_findings?: string[];
 }
 
 // Message types

@@ -9,6 +9,16 @@ from typing import Annotated, Any, Literal, Optional, TypedDict
 from langgraph.graph.message import add_messages
 
 
+class Substep(TypedDict):
+    """A recovery attempt (substep) within a plan step."""
+
+    id: int  # Substep ID within parent step (0, 1, 2)
+    search_queries: list[str]  # Queries that were tried
+    findings: list[str]  # Findings collected (partial success possible)
+    status: Literal["DONE", "FAILED"]
+    error: Optional[str]  # Why it failed (if FAILED)
+
+
 class PlanStep(TypedDict):
     """A single step in the research plan."""
 
@@ -17,6 +27,12 @@ class PlanStep(TypedDict):
     status: Literal["TODO", "IN_PROGRESS", "DONE", "FAILED", "SKIPPED"]
     result: Optional[str]
     error: Optional[str]
+
+    # --- Per-step recovery ---
+    substeps: list[Substep]  # History of recovery attempts
+    current_substep_index: int  # Which substep we're on (0, 1, 2)
+    max_substeps: int  # Per-step budget (default 3)
+    accumulated_findings: list[str]  # Findings from ALL substeps
 
 
 class SearchResult(TypedDict):
@@ -30,7 +46,14 @@ class SearchResult(TypedDict):
 def merge_search_results(
     existing: list[SearchResult], new: list[SearchResult]
 ) -> list[SearchResult]:
-    """Reducer for merging parallel search results."""
+    """
+    Reducer for merging parallel search results.
+
+    - If new is None, resets to empty list (used to clear after merge)
+    - Otherwise merges existing + new
+    """
+    if new is None:
+        return []  # Reset signal
     return existing + new
 
 
@@ -124,9 +147,7 @@ class ResearchState(TypedDict):
     needs_replan: Annotated[bool, last_value]  # Flag to trigger re-planning after rejection
 
     # --- Error Recovery ---
-    last_error: Annotated[Optional[str], last_value]
-    failed_step_id: Annotated[Optional[int], last_value]
-    recovery_attempts: Annotated[int, last_value]
+    last_error: Annotated[Optional[str], last_value]  # For logging/debugging
 
     # --- Metadata ---
     run_id: str
@@ -166,10 +187,37 @@ def create_initial_state(
         user_response=None,
         needs_replan=False,
         last_error=None,
-        failed_step_id=None,
-        recovery_attempts=0,
         run_id=run_id,
         user_id=user_id,
         original_query=query,
         total_tokens=0,
+    )
+
+
+def create_plan_step(
+    id: int,
+    description: str,
+    max_substeps: int = 3,
+) -> PlanStep:
+    """
+    Factory function for creating PlanStep with substep support.
+
+    Args:
+        id: Step ID
+        description: Step description
+        max_substeps: Per-step recovery budget (default 3)
+
+    Returns:
+        PlanStep with initialized substep fields
+    """
+    return PlanStep(
+        id=id,
+        description=description,
+        status="TODO",
+        result=None,
+        error=None,
+        substeps=[],
+        current_substep_index=0,
+        max_substeps=max_substeps,
+        accumulated_findings=[],
     )

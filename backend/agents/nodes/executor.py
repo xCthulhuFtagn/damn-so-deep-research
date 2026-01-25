@@ -82,24 +82,48 @@ async def identify_themes_node(
             "phase": "reporting",
         }
 
-    # Get current step
+    # Get current step - check for IN_PROGRESS first (recovery scenario)
     current_step = None
     for i, step in enumerate(plan):
-        if step["status"] == "TODO":
+        if step["status"] == "IN_PROGRESS":
             current_step = step
             current_idx = i
             break
 
+    # If no IN_PROGRESS step, find first TODO
     if not current_step:
-        logger.info("No TODO steps found, clearing themes for routing")
+        for i, step in enumerate(plan):
+            if step["status"] == "TODO":
+                current_step = step
+                current_idx = i
+                break
+
+    if not current_step:
+        logger.info("No TODO/IN_PROGRESS steps found, clearing themes for routing")
         return {
             "search_themes": [],
             "phase": "reporting",
         }
 
-    # Mark step as in progress
+    # Check if strategist already provided search_themes (recovery scenario)
+    existing_themes = state.get("search_themes", [])
+    if existing_themes and current_step["status"] == "IN_PROGRESS":
+        # Strategist already generated alternative queries - use them directly
+        logger.info(
+            f"Using {len(existing_themes)} themes from strategist: {existing_themes}"
+        )
+        return {
+            "current_step_index": current_idx,
+            "step_findings": [],
+            "step_search_count": 0,
+            "phase": "searching",
+            # search_themes already set by strategist
+        }
+
+    # Mark step as in progress (if not already)
     updated_plan = plan.copy()
-    updated_plan[current_idx] = {**current_step, "status": "IN_PROGRESS"}
+    if current_step["status"] == "TODO":
+        updated_plan[current_idx] = {**current_step, "status": "IN_PROGRESS"}
 
     # Identify search themes
     llm = get_llm(temperature=0.0)

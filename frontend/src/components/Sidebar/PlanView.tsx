@@ -96,6 +96,29 @@ export default function PlanView({ plan, currentStepIndex, phase }: PlanViewProp
                 {step.error && (
                   <p className="mt-1 text-red-600 dark:text-red-400">{step.error}</p>
                 )}
+                {/* Substep progress indicator */}
+                {(step.status === 'IN_PROGRESS' || step.status === 'FAILED') &&
+                  step.substeps &&
+                  step.substeps.length > 0 && (
+                    <div className="mt-1 flex items-center gap-1">
+                      <span className="text-slate-500 dark:text-slate-400">
+                        Attempts:
+                      </span>
+                      {Array.from({ length: step.max_substeps || 3 }).map((_, i) => (
+                        <div
+                          key={i}
+                          className={clsx(
+                            'w-2 h-2 rounded-full',
+                            i < (step.substeps?.length || 0)
+                              ? 'bg-red-400 dark:bg-red-500'
+                              : i === (step.current_substep_index || 0)
+                              ? 'bg-primary-400 dark:bg-primary-500 animate-pulse'
+                              : 'bg-slate-300 dark:bg-slate-600'
+                          )}
+                        />
+                      ))}
+                    </div>
+                  )}
               </div>
             </div>
           </div>
