@@ -11,6 +11,7 @@ from typing import Any, Dict, Optional, Set
 from backend.agents.graph import create_research_graph
 from backend.agents.state import ResearchState, create_initial_state
 from backend.core.checkpointer import get_checkpointer, get_thread_config
+from backend.core.llm import get_llm_provider
 from backend.persistence.database import get_db_service
 from backend.services.notification_service import get_notification_service
 
@@ -30,6 +31,8 @@ class ResearchService:
         self._approval_events: Dict[str, asyncio.Event] = {}
         self._approval_results: Dict[str, bool] = {}
         self._graph = None
+        # Track tokens per run for aggregation
+        self._run_tokens: Dict[str, int] = {}
 
     async def _get_graph(self):
         """Get or create the compiled research graph."""
@@ -37,6 +40,38 @@ class ResearchService:
             checkpointer = await get_checkpointer()
             self._graph = create_research_graph(checkpointer=checkpointer)
         return self._graph
+
+    async def _on_tokens(self, run_id: str, input_tokens: int, output_tokens: int) -> None:
+        """
+        Callback for token usage tracking.
+
+        Updates database and sends WebSocket notification.
+        """
+        total_new = input_tokens + output_tokens
+        if total_new == 0:
+            return
+
+        try:
+            db = await get_db_service()
+            notification = get_notification_service()
+
+            # Update database
+            await db.increment_tokens(run_id, total_new)
+
+            # Track cumulative tokens for this run
+            self._run_tokens[run_id] = self._run_tokens.get(run_id, 0) + total_new
+
+            # Send WebSocket notification
+            await notification.notify_token_update(
+                run_id,
+                input_tokens,
+                output_tokens,
+                self._run_tokens[run_id],
+            )
+
+            logger.debug(f"Token update for run {run_id}: +{total_new} (total: {self._run_tokens[run_id]})")
+        except Exception as e:
+            logger.warning(f"Failed to track tokens for run {run_id}: {e}")
 
     def is_running(self, run_id: str) -> bool:
         """Check if a run is currently executing."""
@@ -58,6 +93,11 @@ class ResearchService:
 
         notification = get_notification_service()
         db = await get_db_service()
+
+        # Setup token tracking
+        llm_provider = get_llm_provider()
+        llm_provider.set_token_callback(run_id, self._on_tokens)
+        self._run_tokens[run_id] = 0
 
         try:
             # Create initial state
@@ -122,6 +162,7 @@ class ResearchService:
         finally:
             # Clean up
             self._running_tasks.pop(run_id, None)
+            llm_provider.clear_token_callback()
 
     async def _process_graph_event(
         self,
@@ -203,6 +244,14 @@ class ResearchService:
 
         notification = get_notification_service()
         db = await get_db_service()
+
+        # Setup token tracking (resume with existing count)
+        llm_provider = get_llm_provider()
+        llm_provider.set_token_callback(run_id, self._on_tokens)
+        # Load existing token count from database
+        run = await db.get_run(run_id)
+        if run:
+            self._run_tokens[run_id] = run.total_tokens
 
         try:
             graph = await self._get_graph()
@@ -295,6 +344,9 @@ class ResearchService:
             logger.exception(f"Resume error for run {run_id}: {e}")
             await db.update_run(run_id, status="failed")
             await notification.notify_run_error(run_id, str(e))
+
+        finally:
+            llm_provider.clear_token_callback()
 
     async def get_state(self, run_id: str) -> Optional[Dict[str, Any]]:
         """Get current state for a run."""

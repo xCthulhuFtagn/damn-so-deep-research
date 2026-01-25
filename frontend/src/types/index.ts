@@ -100,6 +100,7 @@ export type WSEventType =
   | 'question'
   | 'plan_confirmation_needed'
   | 'plan_update'
+  | 'token_update'
   | 'run_start'
   | 'run_complete'
   | 'run_error'
@@ -162,4 +163,11 @@ export interface RunErrorEvent extends WSEvent {
 export interface PlanConfirmationNeededEvent extends WSEvent {
   type: 'plan_confirmation_needed';
   plan: PlanStep[];
+}
+
+export interface TokenUpdateEvent extends WSEvent {
+  type: 'token_update';
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
 }

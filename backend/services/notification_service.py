@@ -127,6 +127,24 @@ class NotificationService:
             ),
         )
 
+    async def notify_token_update(
+        self,
+        run_id: str,
+        input_tokens: int,
+        output_tokens: int,
+        total_tokens: int,
+    ) -> None:
+        """Notify clients of token usage update."""
+        await self.manager.broadcast(
+            run_id,
+            create_ws_event(
+                WSEventType.TOKEN_UPDATE,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                total_tokens=total_tokens,
+            ),
+        )
+
     async def notify_search_parallel(
         self,
         run_id: str,

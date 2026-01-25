@@ -156,6 +156,9 @@ class WSEventType:
     SEARCH_PARALLEL = "search_parallel"
     PLAN_UPDATE = "plan_update"
 
+    # Token tracking
+    TOKEN_UPDATE = "token_update"
+
     # Human-in-the-loop
     APPROVAL_NEEDED = "approval_needed"
     APPROVAL_RESPONSE = "approval_response"

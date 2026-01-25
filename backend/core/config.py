@@ -29,6 +29,21 @@ class LLMSettings(BaseSettings):
     base_url: str = Field(default="http://localhost:8000/v1", validation_alias="OPENAI_BASE_URL")
     model: str = Field(default="gpt-oss-20b", validation_alias="OPENAI_MODEL")
 
+    # Creative/verbose generation settings (for reports, summaries)
+    # Higher temperature = more creative but less deterministic
+    creative_temperature: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=2.0,
+        validation_alias="LLM_CREATIVE_TEMPERATURE",
+    )
+    # Higher max_tokens allows for more comprehensive output
+    creative_max_tokens: Optional[int] = Field(
+        default=4096,
+        ge=256,
+        validation_alias="LLM_CREATIVE_MAX_TOKENS",
+    )
+
     @field_validator("api_key")
     @classmethod
     def validate_api_key(cls, v: str) -> str:

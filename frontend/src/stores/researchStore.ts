@@ -277,6 +277,20 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
         set({ plan: event.plan as PlanStep[] });
         break;
 
+      case 'token_update':
+        // Update token count for current run
+        set((state) => {
+          if (!state.currentRun) return state;
+          const totalTokens = event.total_tokens as number;
+          return {
+            currentRun: { ...state.currentRun, total_tokens: totalTokens },
+            runs: state.runs.map((r) =>
+              r.id === state.currentRun?.id ? { ...r, total_tokens: totalTokens } : r
+            ),
+          };
+        });
+        break;
+
       case 'step_start':
         set({ currentStepIndex: event.step_index as number });
         break;

@@ -51,8 +51,8 @@ export default function PlanView({ plan, currentStepIndex, phase }: PlanViewProp
   ).length;
 
   return (
-    <div className="p-4 border-b border-slate-200 dark:border-slate-800">
-      <div className="flex items-center justify-between mb-3">
+    <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex flex-col min-h-0">
+      <div className="flex items-center justify-between mb-3 flex-shrink-0">
         <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">Research Plan</h3>
         <span className="text-xs text-slate-500 dark:text-slate-400">
           {completedCount}/{plan.length}
@@ -60,7 +60,7 @@ export default function PlanView({ plan, currentStepIndex, phase }: PlanViewProp
       </div>
 
       {/* Progress bar */}
-      <div className="h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full mb-4">
+      <div className="h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full mb-4 flex-shrink-0">
         <div
           className="h-full bg-primary-500 rounded-full transition-all"
           style={{ width: `${(completedCount / plan.length) * 100}%` }}
@@ -68,12 +68,12 @@ export default function PlanView({ plan, currentStepIndex, phase }: PlanViewProp
       </div>
 
       {/* Phase indicator */}
-      <div className="mb-3 text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+      <div className="mb-3 text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider flex-shrink-0">
         Phase: {phase}
       </div>
 
-      {/* Steps */}
-      <div className="space-y-2 max-h-64 overflow-y-auto">
+      {/* Steps - scrollable area that grows with sidebar */}
+      <div className="space-y-2 overflow-y-auto flex-1">
         {plan.map((step, index) => (
           <div
             key={step.id}
@@ -85,7 +85,7 @@ export default function PlanView({ plan, currentStepIndex, phase }: PlanViewProp
             <div className="flex items-start gap-2">
               {getStepIcon(step, index === currentStepIndex)}
               <div className="flex-1 min-w-0">
-                <p className="font-medium text-slate-900 dark:text-slate-100 truncate">
+                <p className="font-medium text-slate-900 dark:text-slate-100 break-words">
                   {step.description}
                 </p>
                 {step.result && step.status === 'DONE' && (
