@@ -158,17 +158,74 @@ The system uses **LangGraph StateGraph** with five specialized agents:
 
 #### 4. Evaluator
 - **Role**: Validates research findings for each step
-- **Logic**:
-  - Success → Mark step DONE, continue to next
-  - Failure → Mark step FAILED, trigger Strategist
+- **Decisions**:
+  - `APPROVE` → Findings sufficient, mark step DONE, continue to next
+  - `FAIL` → Findings insufficient, trigger Strategist for recovery (if budget remains)
+  - `SKIP` → Step not critical, mark SKIPPED, continue to next
 
 #### 5. Strategist
-- **Role**: Recovery from failures
-- **Actions**: Insert corrective steps or retry with different approach
+- **Role**: Recovery from failed substeps
+- **Actions**: Generates alternative search queries for retry
+- **Trigger**: Only when Evaluator returns FAIL and substep budget not exhausted
 
 #### 6. Reporter
 - **Role**: Generate final research report
 - **Output**: Comprehensive Markdown report synthesizing all findings
+
+### Per-Step Recovery (Substeps)
+
+Each plan step has a **recovery budget** (`max_substeps`, default: 3). When a search fails to produce adequate findings, the system retries with different queries instead of immediately failing the entire step.
+
+```
+PlanStep {
+    id: 0,
+    description: "Research X",
+    status: "IN_PROGRESS",
+    substeps: [                         # History of attempts
+        {id: 0, queries: [...], status: "FAILED"},
+        {id: 1, queries: [...], status: "FAILED"},
+    ],
+    current_substep_index: 2,           # Next attempt
+    max_substeps: 3,                    # Budget
+    accumulated_findings: [...]         # Partial findings from all attempts
+}
+```
+
+**Recovery Flow:**
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        Step 0: "Research X"                         │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  Substep 0 (initial):                                               │
+│    identify_themes → ["query A", "query B"]                         │
+│    search (parallel) → findings                                     │
+│    evaluator → FAIL (insufficient)                                  │
+│         │                                                           │
+│         ▼                                                           │
+│  Substep 1 (recovery):                                              │
+│    strategist → ["alternative query C", "query D"]                  │
+│    search (parallel) → more findings                                │
+│    evaluator → FAIL (still insufficient)                            │
+│         │                                                           │
+│         ▼                                                           │
+│  Substep 2 (last chance):                                           │
+│    strategist → ["query E", "query F"]                              │
+│    search (parallel) → findings                                     │
+│    evaluator → APPROVE (or budget exhausted → FAILED)               │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**Configuration** (in `backend/core/config.py` → `ResearchSettings`):
+
+| Parameter | Env Variable | Default | Description |
+|-----------|--------------|---------|-------------|
+| `min_plan_steps` | `RESEARCH_MIN_PLAN_STEPS` | 3 | Minimum steps in research plan |
+| `max_plan_steps` | `RESEARCH_MAX_PLAN_STEPS` | 10 | Maximum steps in research plan |
+| `max_substeps` | `RESEARCH_MAX_SUBSTEPS` | 3 | Recovery attempts per step |
+| `max_searches_per_step` | `RESEARCH_MAX_SEARCHES_PER_STEP` | 3 | Parallel searches per substep |
 
 ### Execution Flow
 
@@ -207,6 +264,48 @@ class ResearchState(TypedDict):
     pending_approval: Optional[dict]         # Command awaiting approval
     run_id: str
     user_id: str
+```
+
+### State Reducers
+
+LangGraph uses **reducers** to merge updates from multiple nodes into the state. Reducers are attached to fields via `Annotated[Type, reducer_func]`.
+
+| Field | Reducer | Behavior |
+|-------|---------|----------|
+| `messages` | `add_messages` | Appends new messages to history |
+| `parallel_search_results` | `merge_search_results` | Merges results during fan-in; `None` resets to `[]` |
+| `step_findings` | `replace_findings` | Last write wins (prevents accumulation) |
+| `step_search_count` | `add_or_reset_count` | Increments; `0` resets |
+| `plan`, `phase`, `current_step_index` | `last_value` / `replace_plan` | Last write wins |
+
+**Example: Parallel Search Fan-out/Fan-in**
+
+```
+identify_themes returns: {search_themes: ["q1", "q2", "q3"]}
+                              │
+            ┌─────────────────┼─────────────────┐
+            ▼                 ▼                 ▼
+      search_node #1    search_node #2    search_node #3
+      returns: {        returns: {        returns: {
+        parallel_         parallel_         parallel_
+        search_results:   search_results:   search_results:
+        [r1]              [r2]              [r3]
+      }                 }                 }
+            │                 │                 │
+            └─────────────────┼─────────────────┘
+                              ▼
+                    REDUCER merges:
+                    [] + [r1] → [r1]
+                    [r1] + [r2] → [r1, r2]
+                    [r1, r2] + [r3] → [r1, r2, r3]
+                              │
+                              ▼
+                    merge_results_node
+                    returns: {parallel_search_results: None}
+                              │
+                              ▼
+                    REDUCER resets:
+                    merge([r1,r2,r3], None) → []
 ```
 
 ## Project Structure & Module Roles
@@ -333,6 +432,10 @@ Connect to `/ws/{run_id}` for real-time updates:
 | `FIRECRAWL_API_KEY` | - | Firecrawl API key (optional) |
 | `MAX_SEARCH_RESULTS` | `6` | Results per search |
 | `MAX_FINAL_TOP_CHUNKS` | `3` | Top chunks after filtering |
+| `RESEARCH_MIN_PLAN_STEPS` | `3` | Minimum steps in research plan |
+| `RESEARCH_MAX_PLAN_STEPS` | `10` | Maximum steps in research plan |
+| `RESEARCH_MAX_SUBSTEPS` | `3` | Recovery attempts per step |
+| `RESEARCH_MAX_SEARCHES_PER_STEP` | `3` | Parallel searches per substep |
 
 ## Development
 

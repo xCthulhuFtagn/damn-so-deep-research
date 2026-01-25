@@ -1,7 +1,7 @@
 """
 Planner node - creates the research plan.
 
-Takes user query and generates 3-10 actionable research steps.
+Takes user query and generates actionable research steps.
 """
 
 import logging
@@ -12,16 +12,23 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.types import Command
 
 from backend.agents.state import ResearchState, create_plan_step
+from backend.core.config import config
 from backend.core.llm import get_llm
 
 logger = logging.getLogger(__name__)
 
-PLANNER_PROMPT = """You are the Lead Planner for a deep research system.
+
+def get_planner_prompt() -> str:
+    """Generate planner prompt with config values."""
+    min_steps = config.research.min_plan_steps
+    max_steps = config.research.max_plan_steps
+
+    return f"""You are the Lead Planner for a deep research system.
 
 Your ONLY job is to create a research plan based on the user's query.
 
 CRITICAL RULES:
-1. Create 3-10 clear, actionable research steps.
+1. Create {min_steps}-{max_steps} clear, actionable research steps.
 2. Each step must be SELF-CONTAINED - it should not depend on information from other steps.
 3. Steps should be specific research tasks that can be accomplished via web search.
 4. FORBIDDEN: Do NOT include steps for "generating report", "summarizing findings", or "compiling results".
@@ -88,6 +95,8 @@ async def planner_node(
     previous_plan = state.get("plan", [])
 
     # Build messages
+    planner_prompt = get_planner_prompt()
+
     if user_feedback and previous_plan:
         # Re-planning based on user feedback
         logger.info(f"Re-planning with user feedback: {user_feedback[:100]}...")
@@ -95,7 +104,7 @@ async def planner_node(
             f"{i+1}. {step['description']}" for i, step in enumerate(previous_plan)
         )
         messages = [
-            SystemMessage(content=PLANNER_PROMPT),
+            SystemMessage(content=planner_prompt),
             HumanMessage(content=f"""Original query: {state["original_query"]}
 
 Previous plan that was rejected:
@@ -109,7 +118,7 @@ Please create an improved research plan that addresses the user's feedback."""),
     else:
         # Initial planning
         messages = [
-            SystemMessage(content=PLANNER_PROMPT),
+            SystemMessage(content=planner_prompt),
             HumanMessage(content=state["original_query"]),
         ]
 

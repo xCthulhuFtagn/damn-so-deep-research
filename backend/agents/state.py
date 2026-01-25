@@ -8,6 +8,8 @@ from typing import Annotated, Any, Literal, Optional, TypedDict
 
 from langgraph.graph.message import add_messages
 
+from backend.core.config import config
+
 
 class Substep(TypedDict):
     """A recovery attempt (substep) within a plan step."""
@@ -181,7 +183,7 @@ def create_initial_state(
         parallel_search_results=[],
         step_findings=[],
         step_search_count=0,
-        max_searches_per_step=3,
+        max_searches_per_step=config.research.max_searches_per_step,
         pending_approval=None,
         pending_question=None,
         user_response=None,
@@ -197,7 +199,7 @@ def create_initial_state(
 def create_plan_step(
     id: int,
     description: str,
-    max_substeps: int = 3,
+    max_substeps: Optional[int] = None,
 ) -> PlanStep:
     """
     Factory function for creating PlanStep with substep support.
@@ -205,11 +207,14 @@ def create_plan_step(
     Args:
         id: Step ID
         description: Step description
-        max_substeps: Per-step recovery budget (default 3)
+        max_substeps: Per-step recovery budget (default from config.research.max_substeps)
 
     Returns:
         PlanStep with initialized substep fields
     """
+    if max_substeps is None:
+        max_substeps = config.research.max_substeps
+
     return PlanStep(
         id=id,
         description=description,

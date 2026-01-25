@@ -118,6 +118,20 @@ class RunnerSettings(BaseSettings):
     max_retries: int = Field(default=3, ge=0, le=10, alias="MAX_RETRIES")
 
 
+class ResearchSettings(BaseSettings):
+    """Research agent configuration."""
+
+    model_config = SettingsConfigDict(env_prefix="RESEARCH_")
+
+    # Plan limits
+    min_plan_steps: int = Field(default=3, ge=1, le=20, alias="RESEARCH_MIN_PLAN_STEPS")
+    max_plan_steps: int = Field(default=10, ge=1, le=50, alias="RESEARCH_MAX_PLAN_STEPS")
+
+    # Per-step recovery
+    max_substeps: int = Field(default=3, ge=1, le=10, alias="RESEARCH_MAX_SUBSTEPS")
+    max_searches_per_step: int = Field(default=3, ge=1, le=10, alias="RESEARCH_MAX_SEARCHES_PER_STEP")
+
+
 class AuthSettings(BaseSettings):
     """Authentication configuration."""
 
@@ -153,6 +167,7 @@ class Settings(BaseSettings):
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     runner: RunnerSettings = Field(default_factory=RunnerSettings)
     auth: AuthSettings = Field(default_factory=AuthSettings)
+    research: ResearchSettings = Field(default_factory=ResearchSettings)
 
     @field_validator("log_level")
     @classmethod
