@@ -186,28 +186,6 @@ class LLMProvider:
             run_id=run_id,
         )
 
-    def get_llm_with_tools(
-        self,
-        tools: list,
-        temperature: float = 0.0,
-        tool_choice: str = "auto",
-        run_id: Optional[str] = None,
-    ) -> ChatOpenAI:
-        """
-        Get ChatOpenAI instance with tools bound.
-
-        Args:
-            tools: List of LangChain tools to bind
-            temperature: Sampling temperature
-            tool_choice: Tool choice mode ("auto", "required", "none")
-            run_id: Optional run ID for token tracking
-
-        Returns:
-            ChatOpenAI with tools bound
-        """
-        llm = self.get_llm(temperature=temperature, run_id=run_id)
-        return llm.bind_tools(tools, tool_choice=tool_choice)
-
     def track_tokens(self, input_tokens: int, output_tokens: int) -> None:
         """Track token usage."""
         self._total_tokens += input_tokens + output_tokens
