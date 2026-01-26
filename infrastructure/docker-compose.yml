@@ -7,15 +7,17 @@ services:
       dockerfile: infrastructure/Dockerfile.backend
     ports:
       - "8000:8000"
+    env_file:
+      - ../.env
     environment:
-      - DATABASE_PATH=/app/db/app.db
+      - DATABASE_PATH=/app/db/${DB_NAME:-app.db}
       - LANGGRAPH_CHECKPOINT_PATH=/app/db/langgraph.db
       - SEARXNG_URL=http://searxng:8080
-      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your-secret-key-change-in-production}
-      - LLM_BASE_URL=${LLM_BASE_URL:-http://vllm:8000/v1}
-      - LLM_API_KEY=${LLM_API_KEY:-not-needed}
-      - LLM_MODEL=${LLM_MODEL:-openai/gpt-oss-20b}
-      - FIRECRAWL_API_KEY=${FIRECRAWL_API_KEY:-}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-http://vllm:8001/v1}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-EMPTY}
+      - OPENAI_MODEL=${OPENAI_MODEL:-openai/gpt-oss-20b}
+      - AUTH_SECRET_KEY=${AUTH_SECRET_KEY:-your-secret-key-change-in-production}
+      - FIRECRAWL_API_KEY=${FIRECRAWL_API_KEY}
     volumes:
       - ../db:/app/db
       - ../.env:/app/.env:ro
@@ -63,8 +65,10 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+    env_file:
+      - ../.env
     command: >
-      --model openai/gpt-oss-20b
+      --model ${OPENAI_MODEL:-openai/gpt-oss-20b}
       --dtype auto
       --max-model-len 32768
       --gpu-memory-utilization 0.9
