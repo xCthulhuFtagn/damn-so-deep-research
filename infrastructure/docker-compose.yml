@@ -1,0 +1,90 @@
+version: "3.9"
+
+services:
+  backend:
+    build:
+      context: ..
+      dockerfile: infrastructure/Dockerfile.backend
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_PATH=/app/db/app.db
+      - LANGGRAPH_CHECKPOINT_PATH=/app/db/langgraph.db
+      - SEARXNG_URL=http://searxng:8080
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-your-secret-key-change-in-production}
+      - LLM_BASE_URL=${LLM_BASE_URL:-http://vllm:8000/v1}
+      - LLM_API_KEY=${LLM_API_KEY:-not-needed}
+      - LLM_MODEL=${LLM_MODEL:-openai/gpt-oss-20b}
+      - FIRECRAWL_API_KEY=${FIRECRAWL_API_KEY:-}
+    volumes:
+      - ../db:/app/db
+      - ../.env:/app/.env:ro
+    depends_on:
+      - searxng
+      - vllm
+    networks:
+      - research-net
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ..
+      dockerfile: infrastructure/Dockerfile.frontend
+    ports:
+      - "5173:80"
+    environment:
+      - VITE_API_URL=http://localhost:8000
+      - VITE_WS_URL=ws://localhost:8000
+    depends_on:
+      - backend
+    networks:
+      - research-net
+    restart: unless-stopped
+
+  searxng:
+    image: searxng/searxng:latest
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+      - ./searxng/limiter.toml:/etc/searxng/limiter.toml:ro
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8080/
+    networks:
+      - research-net
+    restart: unless-stopped
+
+  vllm:
+    image: vllm/vllm-openai:latest
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    command: >
+      --model openai/gpt-oss-20b
+      --dtype auto
+      --max-model-len 32768
+      --gpu-memory-utilization 0.9
+      --enforce-eager
+      --enable-auto-tool-choice
+      --tool-call-parser openai
+    ports:
+      - "8001:8000"
+    volumes:
+      - ~/.cache/huggingface:/root/.cache/huggingface
+    environment:
+      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN}
+    ipc: host
+    networks:
+      - research-net
+    restart: unless-stopped
+
+networks:
+  research-net:
+    driver: bridge
+
+volumes:
+  db-data:

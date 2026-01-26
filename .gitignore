@@ -1,10 +1,54 @@
+# Environment
 .env
+.env.local
+.env.*.local
+
+# Python
 __pycache__/
-logs/
-research_state.db
+*.py[cod]
+*$py.class
+*.so
+.Python
 .venv/
-.cursor/
+venv/
+ENV/
+env/
+
+# Logs
+logs/
+*.log
+
+# Database
 db/
-research.db
-research_state.db-wal
-research_state.db-shm
+*.db
+*.db-wal
+*.db-shm
+
+# IDE
+.cursor/
+.idea/
+.vscode/
+.claude/
+*.swp
+*.swo
+
+# Legacy (old Swarm implementation)
+_legacy/
+
+# Node
+**/node_modules/
+frontend/dist/
+frontend/.cache/
+frontend/coverage/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker volumes
+searxng/
+
+# Tests
+.pytest_cache/
+.coverage
+htmlcov/

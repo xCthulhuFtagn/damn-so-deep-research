@@ -1,341 +1,479 @@
-# Deep Research Swarm — Система Автоматизированных Исследований
+# Deep Research — Automated Research System
 
-Приложение на **Streamlit** для глубоких автоматизированных исследований на базе **OpenAI Swarm**. Система использует мульти-агентную архитектуру для планирования, выполнения и анализа исследовательских задач с поддержкой веб-поиска, выполнения команд терминала и генерации отчетов.
+A **FastAPI + React** application for deep automated research powered by **LangGraph**. The system uses a multi-agent architecture for planning, executing, and analyzing research tasks with support for parallel web searches, terminal command execution, and report generation.
 
-## Основные возможности
+## Key Features
 
-- **Мульти-агентная архитектура**: Пять специализированных агентов (Planner, Executor, Evaluator, Strategist, Reporter) работают совместно для выполнения сложных исследовательских задач
-- **Мульти-пользовательская поддержка**: Изолированные сессии исследований для каждого пользователя с системой аутентификации
-- **Безопасное выполнение команд**: Система одобрения для команд терминала с визуальным отображением статуса в GUI
-- **Интеллектуальный веб-поиск**: Интеграция с SearXNG и продвинутая фильтрация результатов с использованием би-энкодеров и кросс-энкодеров
-- **Персистентность данных**: SQLite база данных для сохранения состояния между сессиями
-- **Docker поддержка**: Готовые конфигурации для запуска приложения и локального vLLM сервера
+- **LangGraph Multi-Agent Architecture**: Five specialized agents (Planner, Executor, Evaluator, Strategist, Reporter) work together using a StateGraph
+- **Parallel Search**: Execute multiple web searches simultaneously using LangGraph's Send API (fan-out/fan-in by themes)
+- **Checkpoint Persistence**: Built-in pause/resume with AsyncSqliteSaver — stop research and continue later
+- **Human-in-the-Loop**: Command approval system with interrupt_before/after for secure terminal execution
+- **Real-time Updates**: WebSocket streaming for live progress in the React UI
+- **Multi-user Support**: JWT authentication with isolated research sessions per user
+- **Intelligent Search**: SearXNG integration with bi-encoder and cross-encoder filtering
 
-## Требования
+## Requirements
 
-- Python 3.10+ (желательно 3.11)
-- `git` (нужен, потому что `swarm` ставится из GitHub)
-- Для локального vLLM: Docker, NVIDIA Container Toolkit, GPU с поддержкой CUDA
+- Python 3.11+
+- Node.js 20+
+- Docker (for SearXNG)
 
-## Установка
+## Quick Start
 
-В корне репозитория:
+### 1. Install Backend
 
 ```bash
+# Create virtual environment
 python -m venv .venv
 source .venv/bin/activate
-pip install -U pip
-pip install -r requirements.txt
+
+# Install dependencies
+pip install -e .
 ```
 
-## Настройка переменных окружения
-
-Создайте файл `.env` рядом с `main.py`:
+### 2. Install Frontend
 
 ```bash
-OPENAI_API_KEY=ваш_ключ
-
-# опционально:
-# OPENAI_BASE_URL=https://...
-# OPENAI_MODEL=gpt-4o
-# DB_NAME=research_state.db
-# MAX_TURNS=25
-# LOG_LEVEL=INFO
-# LOG_FILE=logs/app.log
-# MAX_SEARCH_RESULTS=6
-# MAX_FINAL_TOP_CHUNKS=3
+cd frontend
+npm install
 ```
 
-Что означает:
+### 3. Configure Environment
 
-- **`OPENAI_API_KEY`**: обязателен (или `EMPTY` для локального vLLM).
-- **`OPENAI_BASE_URL`**: опционально (например, если используете совместимый прокси/шлюз или локальный vLLM).
-- **`OPENAI_MODEL`**: модель (по умолчанию `gpt-oss-20b` для локального vLLM, или `gpt-4o` для OpenAI).
-- **`DB_NAME`**: имя файла SQLite (по умолчанию `research_state.db`, создаётся в папке проекта).
-- **`MAX_TURNS`**: лимит ходов в одном запуске Swarm (по умолчанию `25`).
-- **`LOG_LEVEL`**: уровень логов (`DEBUG`, `INFO`, `WARNING`, `ERROR`). По умолчанию `INFO`.
-- **`LOG_FILE`**: путь до файла логов (если задан — логи пишутся и в консоль, и в файл с ротацией).
-- **`MAX_SEARCH_RESULTS`**: максимальное количество результатов поиска для обработки (по умолчанию `6`).
-- **`MAX_FINAL_TOP_CHUNKS`**: количество финальных релевантных чанков после фильтрации (по умолчанию `3`).
-
-## Запуск
+Create a `.env` file in the project root:
 
 ```bash
-streamlit run main.py
+# LLM Configuration
+LLM_BASE_URL=http://localhost:1234/v1   # Or your OpenAI-compatible endpoint
+LLM_API_KEY=your-api-key
+LLM_MODEL=gpt-4
+
+# Auth
+JWT_SECRET_KEY=your-secret-key-change-in-production
+
+# Search (optional)
+SEARXNG_URL=http://localhost:8080
+FIRECRAWL_API_KEY=your-firecrawl-key   # Optional, for enhanced scraping
+
+# Database paths (optional, defaults shown)
+DATABASE_PATH=db/app.db
+LANGGRAPH_CHECKPOINT_PATH=db/langgraph.db
 ```
 
-После запуска откройте страницу Streamlit (ссылка будет выведена в терминале).
-
-## Как пользоваться
-
-### Первый запуск
-
-1. При первом открытии приложения вам будет предложено зарегистрироваться или войти.
-2. После входа создайте новый research run через кнопку **"➕ New Research Run"** в сайдбаре.
-3. Введите тему исследования в поле ввода чата.
-
-### Интерфейс
-
-- **Сайдбар "Research Plan"**: Показывает план исследования и статусы шагов (TODO/IN_PROGRESS/DONE/FAILED) с цветовой индикацией.
-- **Сайдбар "Security Approvals"**: Отображает команды терминала, ожидающие одобрения. Вы можете одобрить (✅) или запретить (❌) каждую команду.
-- **Основной чат**: Показывает всю историю взаимодействия с агентами, включая:
-  - Статусы одобрения команд терминала (⏳ Ожидание одобрения, ✅ Одобрено, ❌ Запрещено)
-  - Результаты веб-поиска с количеством найденных источников
-  - Выполненные инструменты и их результаты
-  - Финальные отчеты исследования
-- **Кнопки управления**: 
-  - **⏸️ Pause Research**: Приостанавливает выполнение исследования
-  - **▶️ Resume Research**: Возобновляет выполнение после паузы
-
-### Процесс исследования
-
-1. **Планирование**: Агент Planner создает план из 3-10 исследовательских шагов.
-2. **Выполнение**: Агент Executor последовательно выполняет каждый шаг, используя веб-поиск, чтение файлов или выполнение команд (с одобрением).
-3. **Оценка**: Агент Evaluator проверяет результаты каждого шага.
-4. **Восстановление**: При неудаче шага агент Strategist создает корректирующие шаги.
-5. **Отчетность**: После завершения всех шагов агент Reporter генерирует финальный отчет.
-
-## Логи
-
-Логи выводятся в консоль, где запущен Streamlit. Чтобы включить подробности:
+### 4. Start Services
 
 ```bash
-LOG_LEVEL=DEBUG streamlit run main.py
+# Terminal 1: Start SearXNG
+cd infrastructure
+docker-compose up searxng
+
+# Terminal 2: Start Backend
+uvicorn backend.main:app --reload
+
+# Terminal 3: Start Frontend
+cd frontend
+npm run dev
 ```
 
-Чтобы писать в файл:
+Open http://localhost:5173 in your browser.
+
+## Docker Deployment
+
+Run everything with Docker Compose:
 
 ```bash
-LOG_FILE=logs/app.log streamlit run main.py
+cd infrastructure
+docker-compose up --build
 ```
 
-## Архитектура системы
+This starts:
+- **Backend** on http://localhost:8000
+- **Frontend** on http://localhost:5173
+- **SearXNG** on http://localhost:8080
 
-### Мульти-агентная архитектура
+## Architecture
 
-Система использует архитектуру **OpenAI Swarm** с пятью специализированными агентами:
+### System Overview
 
-#### 1. **Planner (Планировщик)**
-- **Роль**: Создание структурированного плана исследования
-- **Инструменты**: `add_steps_to_plan`, `ask_user`
-- **Выход**: План из 3-10 конкретных исследовательских задач
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         React Frontend                          │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
+│  │  Auth Pages │  │  Research   │  │       Sidebar           │  │
+│  │             │  │    Chat     │  │  - Plan View            │  │
+│  │             │  │             │  │  - Run List             │  │
+│  │             │  │             │  │  - Approval Panel       │  │
+│  └─────────────┘  └─────────────┘  └─────────────────────────┘  │
+└────────────────────────────┬────────────────────────────────────┘
+                             │ HTTP/WebSocket
+┌────────────────────────────▼────────────────────────────────────┐
+│                       FastAPI Backend                           │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
+│  │  REST API   │  │  WebSocket  │  │      Services           │  │
+│  │  - /auth    │  │  Manager    │  │  - ResearchService      │  │
+│  │  - /runs    │  │             │  │  - NotificationService  │  │
+│  │  - /research│  │             │  │                         │  │
+│  └─────────────┘  └─────────────┘  └─────────────────────────┘  │
+└────────────────────────────┬────────────────────────────────────┘
+                             │
+┌────────────────────────────▼────────────────────────────────────┐
+│                     LangGraph StateGraph                        │
+│                                                                 │
+│    ┌──────────┐    ┌──────────────────┐    ┌──────────┐        │
+│    │ Planner  │───▶│  Parallel Search │───▶│ Evaluator│        │
+│    └──────────┘    │  (Send API)      │    └────┬─────┘        │
+│                    │  ┌────┐ ┌────┐   │         │              │
+│                    │  │ S1 │ │ S2 │...│    ┌────▼─────┐        │
+│                    │  └────┘ └────┘   │    │Strategist│        │
+│                    └──────────────────┘    └────┬─────┘        │
+│                                                 │              │
+│                         ┌──────────┐            │              │
+│                         │ Reporter │◀───────────┘              │
+│                         └──────────┘                           │
+│                                                                 │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │              AsyncSqliteSaver (Checkpointing)           │   │
+│  └─────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
+```
 
-#### 2. **Executor (Исполнитель)**
-- **Роль**: Выполнение исследовательских шагов
-- **Инструменты**: `get_current_plan_step`, `intelligent_web_search`, `read_file`, `execute_terminal_command`, `answer_from_knowledge`, `ask_user`
-- **Особенности**: 
-  - Всегда начинает с получения текущего шага плана
-  - Ограничение: максимум 3 вызова `intelligent_web_search` на шаг
-  - Передает управление Evaluator после сбора данных
+### Multi-Agent Architecture
 
-#### 3. **Evaluator (Оценщик)**
-- **Роль**: Валидация результатов исследования
-- **Инструменты**: `get_current_plan_step`, `submit_step_result`, `mark_step_failed`
-- **Логика**:
-  - При успехе: сохраняет результат и помечает шаг как DONE
-  - При неудаче: помечает шаг как FAILED и передает управление Strategist
+The system uses **LangGraph StateGraph** with five specialized agents:
 
-#### 4. **Strategist (Стратег)**
-- **Роль**: Восстановление после неудач
-- **Инструменты**: `insert_corrective_steps`, `add_steps_to_plan`, `get_recovery_context`, `ask_user`
-- **Особенности**: Вставляет корректирующие шаги после провалившегося шага или добавляет новые шаги в конец плана
+#### 1. Planner
+- **Role**: Creates a structured research plan (3-10 steps)
+- **Output**: Plan with specific research tasks
+- **Interrupt**: After planning for user review
 
-#### 5. **Reporter (Репортер)**
-- **Роль**: Генерация финального отчета
-- **Инструменты**: `get_research_summary`
-- **Выход**: Исчерпывающий Markdown отчет, синтезирующий все результаты исследования
+#### 2. Executor (Theme Identifier)
+- **Role**: Analyzes current step and identifies search themes
+- **Output**: 1-5 parallel search themes per step
+- **Feature**: Triggers parallel fan-out
 
-### Поток выполнения
+#### 3. Search Nodes (Parallel)
+- **Role**: Execute web searches in parallel using Send API
+- **Tools**: `intelligent_web_search` with SearXNG + Firecrawl
+- **Feature**: True parallelism via LangGraph's fan-out/fan-in
+
+#### 4. Evaluator
+- **Role**: Validates research findings for each step
+- **Decisions**:
+  - `APPROVE` → Findings sufficient, mark step DONE, continue to next
+  - `FAIL` → Findings insufficient, trigger Strategist for recovery (if budget remains)
+  - `SKIP` → Step not critical, mark SKIPPED, continue to next
+
+#### 5. Strategist
+- **Role**: Recovery from failed substeps
+- **Actions**: Generates alternative search queries for retry
+- **Trigger**: Only when Evaluator returns FAIL and substep budget not exhausted
+
+#### 6. Reporter
+- **Role**: Generate final research report
+- **Output**: Comprehensive Markdown report synthesizing all findings
+
+### Per-Step Recovery (Substeps)
+
+Each plan step has a **recovery budget** (`max_substeps`, default: 3). When a search fails to produce adequate findings, the system retries with different queries instead of immediately failing the entire step.
+
+```
+PlanStep {
+    id: 0,
+    description: "Research X",
+    status: "IN_PROGRESS",
+    substeps: [                         # History of attempts
+        {id: 0, queries: [...], status: "FAILED"},
+        {id: 1, queries: [...], status: "FAILED"},
+    ],
+    current_substep_index: 2,           # Next attempt
+    max_substeps: 3,                    # Budget
+    accumulated_findings: [...]         # Partial findings from all attempts
+}
+```
+
+**Recovery Flow:**
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        Step 0: "Research X"                         │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  Substep 0 (initial):                                               │
+│    identify_themes → ["query A", "query B"]                         │
+│    search (parallel) → findings                                     │
+│    evaluator → FAIL (insufficient)                                  │
+│         │                                                           │
+│         ▼                                                           │
+│  Substep 1 (recovery):                                              │
+│    strategist → ["alternative query C", "query D"]                  │
+│    search (parallel) → more findings                                │
+│    evaluator → FAIL (still insufficient)                            │
+│         │                                                           │
+│         ▼                                                           │
+│  Substep 2 (last chance):                                           │
+│    strategist → ["query E", "query F"]                              │
+│    search (parallel) → findings                                     │
+│    evaluator → APPROVE (or budget exhausted → FAILED)               │
+│                                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**Configuration** (in `backend/core/config.py` → `ResearchSettings`):
+
+| Parameter | Env Variable | Default | Description |
+|-----------|--------------|---------|-------------|
+| `min_plan_steps` | `RESEARCH_MIN_PLAN_STEPS` | 3 | Minimum steps in research plan |
+| `max_plan_steps` | `RESEARCH_MAX_PLAN_STEPS` | 10 | Maximum steps in research plan |
+| `max_substeps` | `RESEARCH_MAX_SUBSTEPS` | 3 | Recovery attempts per step |
+| `max_searches_per_step` | `RESEARCH_MAX_SEARCHES_PER_STEP` | 3 | Parallel searches per substep |
+
+### Execution Flow
 
 ```mermaid
 graph TD
-    User["Пользователь"] -->|Запрос| Planner["Planner Agent"]
-    Planner -->|Создает план| PlanDB["База данных: plan"]
-    PlanDB -->|Триггер| Executor["Executor Agent"]
-    Executor -->|Использует| Tools["Инструменты:<br/>- intelligent_web_search<br/>- execute_terminal_command<br/>- read_file"]
-    Tools -->|Результаты| Evaluator["Evaluator Agent"]
-    Evaluator -->|Успех| PlanDB
-    Evaluator -->|Неудача| Strategist["Strategist Agent"]
-    Strategist -->|Корректирующие шаги| PlanDB
-    PlanDB -->|Все шаги DONE| Reporter["Reporter Agent"]
-    Reporter -->|Финальный отчет| User
+    Start[User Query] --> Planner
+    Planner -->|Creates Plan| Interrupt1[Plan Review]
+    Interrupt1 -->|Approved| Executor
+    Executor -->|Identifies Themes| FanOut{Fan-Out}
+    FanOut -->|Theme 1| Search1[Search Node]
+    FanOut -->|Theme 2| Search2[Search Node]
+    FanOut -->|Theme N| SearchN[Search Node]
+    Search1 --> Merge[Merge Results]
+    Search2 --> Merge
+    SearchN --> Merge
+    Merge --> Evaluator
+    Evaluator -->|Success| NextStep{More Steps?}
+    Evaluator -->|Failure| Strategist
+    Strategist --> Executor
+    NextStep -->|Yes| Executor
+    NextStep -->|No| Reporter
+    Reporter --> End[Final Report]
 ```
 
-### Мульти-пользовательская архитектура
+### State Schema
 
-Приложение поддерживает несколько пользователей с полной изоляцией данных:
-
-- **Аутентификация**: Система регистрации и входа с хешированием паролей (bcrypt)
-- **Изоляция сессий**: Каждый research run привязан к пользователю через `user_id`
-- **База данных**: Все таблицы используют `run_id` для изоляции данных между сессиями
-
-### Система безопасности команд терминала
-
-Для обеспечения безопасности выполнения команд терминала реализована система одобрения:
-
-1. **Запрос одобрения**: Когда агент вызывает `execute_terminal_command`, команда сохраняется в таблице `approvals` со статусом "ожидание" (0)
-2. **Визуализация**: 
-   - В сайдбаре отображается список команд, ожидающих одобрения
-   - В основном чате показывается статус каждой команды: ⏳ Ожидание, ✅ Одобрено, ❌ Запрещено
-3. **Одобрение/Запрет**: Пользователь может одобрить или запретить команду через кнопки в сайдбаре
-4. **Выполнение**: Команда выполняется только после одобрения, результат возвращается агенту
-
-### Интеграция SearXNG
-
-Система использует **SearXNG** (метапоисковая система) для веб-поиска:
-
-- **Конфигурация**: Настройки в `searxng/settings.yml` и `searxng/limiter.toml`
-- **Поисковые движки**: Google, Brave, Wikipedia (настраиваемые)
-- **API**: Доступ через `http://localhost:666/search`
-- **Алгоритм фильтрации**:
-  1. Получение ссылок через SearXNG
-  2. Параллельное скачивание и умная нарезка текста
-  3. Bi-Encoder: Векторизация и грубый отсев (Top-20)
-  4. Cross-Encoder: Точная перепроверка и ранжирование (Top-3)
-
-### Структура проекта
-
-```
-damn-so-deep-research/
-├── main.py                 # Основной Streamlit интерфейс: аутентификация, управление runs, отображение чата
-├── research_agents.py      # Определения всех агентов (Planner, Executor, Evaluator, Strategist, Reporter)
-├── runner.py               # Логика запуска swarm в фоновых потоках, управление handoffs, контекст runs
-├── database.py             # DatabaseService класс: управление SQLite, мульти-тенантность
-├── db_session.py           # Адаптер между SDK agents и DatabaseService для персистентности истории
-├── schema.py               # Pydantic модели для валидации данных (ChatMessage и др.)
-├── config.py               # Загрузка переменных окружения из .env, настройки приложения
-├── logging_setup.py        # Конфигурация системы логирования
-├── requirements.txt        # Python зависимости
-├── docker-compose.yml       # Конфигурация для локального vLLM и SearXNG
-├── Dockerfile              # Docker образ для основного приложения
-├── tools/                  # Инструменты для агентов
-│   ├── search.py           # intelligent_web_search: интеграция с SearXNG, фильтрация результатов
-│   ├── planning.py         # add_steps_to_plan, get_current_plan_step, insert_corrective_steps
-│   ├── execution.py        # execute_terminal_command, read_file, answer_from_knowledge, ask_user
-│   ├── reporting.py        # get_research_summary, submit_step_result, mark_step_failed, get_recovery_context
-│   └── legacy.py           # Устаревшие инструменты
-├── utils/                  # Утилиты
-│   ├── web_scraper.py      # Логика веб-скрапинга и обработки URL
-│   ├── text_processing.py  # Би-энкодеры, кросс-энкодеры, нарезка текста
-│   └── context.py          # Контекстные переменные для разделения состояния в потоке (current_run_id)
-└── searxng/                # Конфигурация SearXNG
-    ├── settings.yml        # Настройки поисковых движков и параметров
-    └── limiter.toml        # Настройки лимитов запросов
+```python
+class ResearchState(TypedDict):
+    messages: Annotated[list, add_messages]  # Conversation history
+    plan: list[PlanStep]                     # Research plan
+    current_step_index: int                  # Active step
+    phase: Literal["planning", "searching", "evaluating", ...]
+    search_themes: list[str]                 # Themes for parallel search
+    parallel_search_results: list[SearchResult]  # Fan-in results
+    step_findings: list[str]                 # Accumulated findings
+    pending_approval: Optional[dict]         # Command awaiting approval
+    run_id: str
+    user_id: str
 ```
 
-### База данных (SQLite)
+### State Reducers
 
-Проект использует SQLite (`research_state.db`) для управления состоянием исследования. Основные таблицы:
+LangGraph uses **reducers** to merge updates from multiple nodes into the state. Reducers are attached to fields via `Annotated[Type, reducer_func]`.
 
-- **`users`**: Пользователи системы (id, username, password_hash, created_at)
-- **`runs`**: Исследовательские сессии (id, user_id, title, status, created_at)
-- **`plan`**: План исследования (id, run_id, step_number, description, status, result, feedback)
-  - Статусы: `TODO`, `IN_PROGRESS`, `DONE`, `FAILED`
-- **`approvals`**: Одобрения команд терминала (command_hash, run_id, command_text, approved)
-  - Статусы: `0` (ожидание), `1` (одобрено), `-1` (запрещено)
-- **`messages`**: История сообщений и взаимодействий (id, run_id, role, content, tool_calls, tool_call_id, sender, session_id, task_number, timestamp)
-- **`run_state`**: Состояние выполнения (run_id, key, value)
-  - Ключи: `swarm_running`, `pause_requested`, `active_task`, `pending_question`, `pending_question_response`
+| Field | Reducer | Behavior |
+|-------|---------|----------|
+| `messages` | `add_messages` | Appends new messages to history |
+| `parallel_search_results` | `merge_search_results` | Merges results during fan-in; `None` resets to `[]` |
+| `step_findings` | `replace_findings` | Last write wins (prevents accumulation) |
+| `step_search_count` | `add_or_reset_count` | Increments; `0` resets |
+| `plan`, `phase`, `current_step_index` | `last_value` / `replace_plan` | Last write wins |
 
-База данных инициализируется автоматически при первом запуске через `database.py`. Используется WAL (Write-Ahead Logging) режим для лучшей конкурентности.
+**Example: Parallel Search Fan-out/Fan-in**
 
-## Docker
+```
+identify_themes returns: {search_themes: ["q1", "q2", "q3"]}
+                              │
+            ┌─────────────────┼─────────────────┐
+            ▼                 ▼                 ▼
+      search_node #1    search_node #2    search_node #3
+      returns: {        returns: {        returns: {
+        parallel_         parallel_         parallel_
+        search_results:   search_results:   search_results:
+        [r1]              [r2]              [r3]
+      }                 }                 }
+            │                 │                 │
+            └─────────────────┼─────────────────┘
+                              ▼
+                    REDUCER merges:
+                    [] + [r1] → [r1]
+                    [r1] + [r2] → [r1, r2]
+                    [r1, r2] + [r3] → [r1, r2, r3]
+                              │
+                              ▼
+                    merge_results_node
+                    returns: {parallel_search_results: None}
+                              │
+                              ▼
+                    REDUCER resets:
+                    merge([r1,r2,r3], None) → []
+```
 
-### Запуск приложения
+## Project Structure & Module Roles
+
+The project is divided into a **FastAPI backend** and a **React frontend**, with a clear separation of concerns between agent orchestration, API delivery, and user interface.
+
+### 📂 Backend (`/backend`)
+
+The backend follows a service-oriented architecture, with LangGraph handling the complex agentic workflows.
+
+#### 🤖 Agent System (`backend/agents/`)
+Core orchestration logic using LangGraph.
+- **`graph.py`**: The "brain" of the system. Defines the `StateGraph`, connecting nodes (agents) with edges and conditional routing logic.
+- **`state.py`**: Defines `ResearchState`, the shared data structure that agents read from and write to during a research run.
+- **`routing.py`**: Contains the logic for "conditional edges" — determining the next node based on the current state (e.g., whether to retry a search or move to reporting).
+- **`nodes/`**: Individual functional units of the workflow.
+    - `planner.py`: Breaks down high-level queries into a sequence of actionable research steps.
+    - `executor.py`: Prepares context for the current step and identifies specific search themes.
+    - `search.py`: Executes web searches and merges results into the state findings.
+    - `evaluator.py`: Critically assesses findings against step goals to determine completion or failure.
+    - `strategist.py`: Handles recovery logic, adjusting the plan when steps fail or yield insufficient data.
+    - `reporter.py`: Synthesizes all accumulated findings into a final, structured Markdown report.
+- **`parallel/`**: Logic for concurrent operations.
+    - `search_fanout.py`: Uses LangGraph's `Send` API to trigger multiple search nodes in parallel for different themes.
+
+#### 🔌 API Layer (`backend/api/`)
+Handles communication with the outside world.
+- **`routes/`**: RESTful endpoints for authentication, research control, and data retrieval.
+- **`websocket.py`**: Low-level WebSocket management for real-time bi-directional updates.
+- **`dependencies.py`**: FastAPI dependencies for JWT validation, database sessions, and service injection.
+
+#### 🛠️ Tools (`backend/tools/`)
+Functional capabilities provided to agents.
+- **`search.py`**: High-level interface for SearXNG and Firecrawl with built-in scraping logic.
+- **`filesystem.py`**: Safe file operations and terminal command execution with human-in-the-loop protection.
+- **`knowledge.py`**: Local RAG capabilities to answer questions from indexed research data.
+
+#### 💼 Services (`backend/services/`)
+High-level business logic and orchestration.
+- **`research_service.py`**: Manages the lifecycle of research runs (start, pause, resume, cancel) and interfaces directly with the LangGraph.
+- **`notification_service.py`**: Centralized hub for broadcasting events (phase changes, new messages, logs) to the frontend via WebSockets.
+
+#### 🏗️ Core & Infrastructure
+- **`core/`**: Global configuration (`config.py`), LLM provider setup (`llm.py`), and persistence checkpointers (`checkpointer.py`).
+- **`persistence/`**: Database schema (`models.py`) and connection management (`database.py`) using SQLAlchemy and SQLite.
+- **`ml/`**: Advanced text processing utilities (`text_processing.py`), including bi-encoder/cross-encoder models for result re-ranking.
+
+---
+
+### 💻 Frontend (`/frontend`)
+
+A modern React application built with TypeScript, Vite, and Tailwind CSS.
+
+- **`src/components/`**: UI components categorized by feature.
+    - `Chat/`: The main research interface, handling message rendering and user input.
+    - `Sidebar/`: Contextual panels for viewing the research plan, history, and pending approvals.
+    - `Auth/`: User registration and login flows.
+- **`src/stores/`**: Global state management using Zustand, separating `authStore` (user session) from `researchStore` (active run data).
+- **`src/hooks/`**: Custom hooks encapsulating complex logic like WebSocket connectivity (`useWebSocket`) and research lifecycle management (`useResearch`).
+- **`src/api/`**: Strongly typed API clients for both REST and WebSocket communication.
+
+---
+
+## API Reference
+
+### Authentication
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/auth/register` | POST | Register new user |
+| `/auth/login` | POST | Login, returns JWT |
+| `/auth/me` | GET | Get current user |
+
+### Runs
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/runs` | GET | List user's runs |
+| `/runs` | POST | Create new run |
+| `/runs/{id}` | GET | Get run details |
+| `/runs/{id}` | DELETE | Delete run |
+
+### Research Control
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/research/start` | POST | Start/resume research |
+| `/research/pause` | POST | Pause research |
+| `/research/message` | POST | Send user message |
+| `/research/state` | GET | Get current state |
+
+### Approvals
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/approvals/{run_id}/{hash}` | POST | Approve/deny command |
+
+### WebSocket
+
+Connect to `/ws/{run_id}` for real-time updates:
+
+```typescript
+// Event types
+{ type: "phase_change", phase: "executing", step: 2 }
+{ type: "message", role: "assistant", content: "..." }
+{ type: "search_parallel", themes: ["theme1", "theme2"] }
+{ type: "approval_needed", command: "ls -la", hash: "abc123" }
+{ type: "step_complete", step: 2, status: "DONE" }
+```
+
+## Configuration
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LLM_BASE_URL` | - | OpenAI-compatible API endpoint |
+| `LLM_API_KEY` | - | API key for LLM |
+| `LLM_MODEL` | `gpt-4` | Model to use |
+| `JWT_SECRET_KEY` | - | Secret for JWT signing |
+| `DATABASE_PATH` | `db/app.db` | SQLite database path |
+| `LANGGRAPH_CHECKPOINT_PATH` | `db/langgraph.db` | LangGraph checkpoints |
+| `SEARXNG_URL` | `http://localhost:8080` | SearXNG endpoint |
+| `FIRECRAWL_API_KEY` | - | Firecrawl API key (optional) |
+| `MAX_SEARCH_RESULTS` | `6` | Results per search |
+| `MAX_FINAL_TOP_CHUNKS` | `3` | Top chunks after filtering |
+| `RESEARCH_MIN_PLAN_STEPS` | `3` | Minimum steps in research plan |
+| `RESEARCH_MAX_PLAN_STEPS` | `10` | Maximum steps in research plan |
+| `RESEARCH_MAX_SUBSTEPS` | `3` | Recovery attempts per step |
+| `RESEARCH_MAX_SEARCHES_PER_STEP` | `3` | Parallel searches per substep |
+
+## Development
+
+### Running Tests
 
 ```bash
-docker build -t research-swarm .
-docker run -p 8501:8501 --env-file .env -v $(pwd)/logs:/app/logs -v $(pwd)/research_state.db:/app/research_state.db research-swarm
+# Backend tests
+pytest tests/backend -v
+
+# With coverage
+pytest tests/backend --cov=backend --cov-report=html
 ```
 
-### Запуск vLLM и SearXNG
-
-Мы подготовили `docker-compose.yml` с правильными настройками для локального запуска:
-
-1. **Требования**: Docker и NVIDIA Container Toolkit (для vLLM)
-2. **Настройка токена Hugging Face** (если модель требует доступа):
-   ```bash
-   export HUGGING_FACE_HUB_TOKEN=your_token_here
-   ```
-3. **Запуск**:
-   ```bash
-   docker compose up -d
-   ```
-
-Это запустит:
-- **vLLM сервер** на `http://localhost:8001/v1` с моделью `openai/gpt-oss-20b`
-- **SearXNG** на `http://localhost:666`
-
-Настройки в `.env` для работы с локальным vLLM:
+### Code Quality
 
 ```bash
-OPENAI_BASE_URL=http://localhost:8001/v1
-OPENAI_API_KEY=EMPTY
-OPENAI_MODEL=openai/gpt-oss-20b
+# Linting
+ruff check backend/
+
+# Type checking
+mypy backend/
 ```
 
-### Конфигурация SearXNG
+## Migration from Swarm
 
-SearXNG запускается как отдельный сервис в Docker Compose. Конфигурация находится в `searxng/`:
-- `settings.yml`: Настройки поисковых движков (Google, Brave, Wikipedia)
-- `limiter.toml`: Настройки лимитов запросов
+This project was migrated from OpenAI Swarm to LangGraph. Key changes:
 
-По умолчанию SearXNG доступен на порту 666 и интегрирован в инструмент `intelligent_web_search`.
+| Feature | Swarm (Old) | LangGraph (New) |
+|---------|-------------|-----------------|
+| State Management | Custom `run_state` table | Built-in checkpointer |
+| Persistence | Manual message saving | AsyncSqliteSaver |
+| Parallelism | Sequential only | Send API fan-out |
+| Human-in-Loop | Custom polling | interrupt_before/after |
+| UI | Streamlit | React + WebSocket |
+| API | Embedded in Streamlit | FastAPI REST |
 
-## Дополнительная информация
+The old implementation is preserved in `_legacy/` for reference.
 
-### Логика работы агентов
+## License
 
-#### Фаза 1: Планирование
-
-**Агент: `Planner` (Планировщик)**
-- **Триггер**: Пользователь вводит тему исследования
-- **Контекст**: Исходный запрос пользователя, пустой или существующий план
-- **Действия**: 
-  - Вызывает `add_steps_to_plan` с 3-10 конкретными исследовательскими задачами
-  - Возвращает "Plan Created"
-
-#### Фаза 2: Выполнение (Цикл)
-
-Эта фаза выполняется в цикле для каждого шага плана. Агенты используют память в рамках задачи, видя только историю текущего активного шага.
-
-**Агент: `Executor` (Исполнитель)**
-- **Триггер**: Система выбирает следующий шаг со статусом `TODO`
-- **Контекст**: Системный триггер "Execute Step X", статус плана, история текущего шага
-- **Действия**:
-  - Всегда начинает с `get_current_plan_step`
-  - Использует `intelligent_web_search`, `read_file`, `execute_terminal_command` для сбора данных
-  - Передает управление `Evaluator` после сбора информации
-
-**Агент: `Evaluator` (Оценщик)**
-- **Триггер**: Handoff от `Executor` с собранными данными
-- **Контекст**: Полный контекст Executor + последние результаты инструментов
-- **Действия**:
-  - При успехе: вызывает `submit_step_result` и помечает шаг как `DONE`
-  - При неудаче: вызывает `mark_step_failed` и передает управление `Strategist`
-
-**Агент: `Strategist` (Стратег)** (только при неудаче)
-- **Триггер**: Handoff от `Evaluator` после неудачи
-- **Контекст**: Контекст сбоя, текущее состояние плана
-- **Действия**:
-  - Вызывает `insert_corrective_steps` для вставки корректирующих шагов
-  - Или `add_steps_to_plan` для добавления шагов в конец
-  - Передает управление `Executor` для повторной попытки
-
-#### Фаза 3: Отчетность
-
-**Агент: `Reporter` (Репортер)**
-- **Триггер**: Все шаги в плане помечены как `DONE`
-- **Контекст**: Системный триггер "All steps completed", план выполнен на 100%
-- **Действия**:
-  - Вызывает `get_research_summary` для получения всех результатов
-  - Генерирует исчерпывающий Markdown отчет, синтезирующий все данные
-  - Отчет должен включать: "Автор исследования: damn-so-deep-research"
-
-### Особенности реализации
-
-- **Контекст выполнения**: Каждый run имеет свой `run_id`, который используется для изоляции данных
-- **Управление паузой**: Пользователь может приостановить и возобновить выполнение исследования
-- **Вопросы к пользователю**: Агенты могут задавать вопросы через инструмент `ask_user` в критических ситуациях
-- **Оптимизация контекста**: Система автоматически обрезает большие результаты инструментов для экономии контекста
-- **Обработка ошибок**: При сбоях агент Strategist создает корректирующие шаги для восстановления
+Pay me one gazillion dollars man
