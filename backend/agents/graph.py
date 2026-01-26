@@ -20,7 +20,8 @@ from backend.agents.nodes import (
     strategist_node,
     reporter_node,
 )
-from backend.agents.routing import route_search_fanout
+from backend.agents.routing import route_plan_approval
+from backend.agents.parallel.search_fanout import fanout_searches
 
 logger = logging.getLogger(__name__)
 
@@ -33,16 +34,18 @@ def build_research_graph() -> StateGraph:
     Build the research StateGraph.
 
     Graph structure:
-        START -> planner -> identify_themes -> search_fanout
-                                                    |
-                                            [parallel searches]
-                                                    |
-                                            merge_results -> evaluator
-                                                                |
-                                    +---------------------------+---------------------------+
-                                    |                           |                           |
-                            identify_themes              strategist                    reporter -> END
-                            (next step)                 (recovery)
+        START -> planner --[needs_replan?]--> planner (loop)
+                    |
+                    +--> identify_themes -> search_fanout
+                                                |
+                                        [parallel searches]
+                                                |
+                                        merge_results -> evaluator
+                                                            |
+                                +---------------------------+---------------------------+
+                                |                           |                           |
+                        identify_themes              strategist                    reporter -> END
+                        (next step)                 (recovery)
     """
     logger.info("Building research StateGraph")
 
@@ -62,19 +65,25 @@ def build_research_graph() -> StateGraph:
     # Start -> Planner
     builder.add_edge(START, "planner")
 
-    # Planner -> Identify themes
-    builder.add_edge("planner", "identify_themes")
+    # Planner -> conditional routing based on plan approval
+    # If needs_replan=True -> loop back to planner
+    # If approved -> proceed to identify_themes
+    builder.add_conditional_edges(
+        "planner",
+        route_plan_approval,
+        {
+            "planner": "planner",
+            "identify_themes": "identify_themes",
+        },
+    )
 
     # Identify themes -> search fanout (conditional)
-    # Can route to: planner (replan), merge_results (no themes), or fan-out to search_node
+    # Routes to: merge_results (no themes), or fan-out to search_node
     builder.add_conditional_edges(
         "identify_themes",
-        route_search_fanout,
-        # Map return values to node names
+        fanout_searches,
         {
-            "planner": "planner",  # Re-plan case
-            "merge_results": "merge_results",  # No themes case
-            # Send objects handled automatically
+            "merge_results": "merge_results",
         },
     )
 

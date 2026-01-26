@@ -7,7 +7,7 @@ Decides whether step findings are sufficient, need retry, or should be skipped.
 import logging
 from typing import Literal
 
-from langchain_core.messages import AIMessage, SystemMessage
+from langchain_core.messages import SystemMessage
 from langgraph.types import Command
 
 from backend.agents.state import ResearchState, Substep

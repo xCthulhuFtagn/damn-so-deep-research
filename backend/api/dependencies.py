@@ -119,25 +119,3 @@ async def get_current_user(
         raise credentials_exception
 
     return user
-
-
-async def get_optional_user(
-    token: Optional[str] = Depends(oauth2_scheme),
-    db: DatabaseService = Depends(get_db_service),
-) -> Optional[User]:
-    """
-    Get current user if authenticated, None otherwise.
-
-    Does not raise exception for missing/invalid token.
-    """
-    if not token:
-        return None
-
-    token_data = decode_token(token)
-    if not token_data:
-        return None
-
-    if token_data.exp < datetime.now(timezone.utc):
-        return None
-
-    return await db.get_user_by_id(token_data.user_id)
