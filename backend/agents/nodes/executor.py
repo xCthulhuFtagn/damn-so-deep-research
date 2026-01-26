@@ -63,12 +63,12 @@ async def identify_themes_node(
 
     logger.info(f"Identify themes for run {run_id}, step {current_idx}")
 
-    # Check if we need to re-plan (user rejected the plan)
+    # Safety check: needs_replan should be handled by route_plan_approval
+    # but keep this as a fallback in case of unexpected state
     if state.get("needs_replan", False):
-        logger.info(f"Re-planning requested for run {run_id}")
-        # Return special marker for routing back to planner
+        logger.warning(f"Unexpected needs_replan=True in identify_themes for run {run_id}")
         return {
-            "needs_replan": True,  # Keep flag for routing
+            "needs_replan": True,
             "phase": "planning",
         }
 

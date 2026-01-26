@@ -38,23 +38,45 @@ class TokenTrackingCallback(BaseCallbackHandler):
     def on_llm_end(self, response: Any, **kwargs: Any) -> None:
         """Called when LLM finishes. Extract token usage from response."""
         try:
-            # Try to get token usage from response
+            input_tokens = 0
+            output_tokens = 0
+
+            logger.debug(f"on_llm_end called for run {self.run_id}, response type: {type(response).__name__}")
+
+            # Method 1: Try llm_output.token_usage (OpenAI standard)
             if hasattr(response, "llm_output") and response.llm_output:
                 token_usage = response.llm_output.get("token_usage", {})
                 input_tokens = token_usage.get("prompt_tokens", 0)
                 output_tokens = token_usage.get("completion_tokens", 0)
-            elif hasattr(response, "generations") and response.generations:
-                # Try to get from generation info
-                gen = response.generations[0][0] if response.generations[0] else None
-                if gen and hasattr(gen, "generation_info") and gen.generation_info:
-                    input_tokens = gen.generation_info.get("prompt_tokens", 0)
-                    output_tokens = gen.generation_info.get("completion_tokens", 0)
-                else:
-                    input_tokens = 0
-                    output_tokens = 0
-            else:
-                input_tokens = 0
-                output_tokens = 0
+
+            # Method 2: Try generation's usage_metadata (modern langchain)
+            if input_tokens == 0 and output_tokens == 0:
+                if hasattr(response, "generations") and response.generations:
+                    gen = response.generations[0][0] if response.generations[0] else None
+                    if gen:
+                        # Check usage_metadata on the message
+                        if hasattr(gen, "message") and hasattr(gen.message, "usage_metadata"):
+                            usage = gen.message.usage_metadata
+                            if usage:
+                                input_tokens = getattr(usage, "input_tokens", 0) or 0
+                                output_tokens = getattr(usage, "output_tokens", 0) or 0
+
+                        # Fallback: Check generation_info
+                        if input_tokens == 0 and output_tokens == 0:
+                            if hasattr(gen, "generation_info") and gen.generation_info:
+                                input_tokens = gen.generation_info.get("prompt_tokens", 0)
+                                output_tokens = gen.generation_info.get("completion_tokens", 0)
+
+            # Method 3: Try response_metadata on generation message
+            if input_tokens == 0 and output_tokens == 0:
+                if hasattr(response, "generations") and response.generations:
+                    gen = response.generations[0][0] if response.generations[0] else None
+                    if gen and hasattr(gen, "message") and hasattr(gen.message, "response_metadata"):
+                        metadata = gen.message.response_metadata
+                        if metadata:
+                            token_usage = metadata.get("token_usage", {})
+                            input_tokens = token_usage.get("prompt_tokens", 0)
+                            output_tokens = token_usage.get("completion_tokens", 0)
 
             self.total_input_tokens += input_tokens
             self.total_output_tokens += output_tokens
@@ -69,7 +91,10 @@ class TokenTrackingCallback(BaseCallbackHandler):
                     # No running loop - ignore (sync context)
                     pass
 
-            logger.debug(f"Token usage for run {self.run_id}: +{input_tokens} in, +{output_tokens} out")
+            if total > 0:
+                logger.debug(f"Token usage for run {self.run_id}: +{input_tokens} in, +{output_tokens} out")
+            else:
+                logger.debug(f"No token usage info available for run {self.run_id} (LLM may not report tokens)")
         except Exception as e:
             logger.warning(f"Failed to extract token usage: {e}")
 
@@ -236,3 +261,67 @@ def get_creative_llm(run_id: Optional[str] = None) -> ChatOpenAI:
         ChatOpenAI configured for creative generation
     """
     return get_llm_provider().get_creative_llm(run_id=run_id)
+
+
+def extract_tokens_from_response(response: Any) -> tuple[int, int]:
+    """
+    Extract token usage from an AIMessage or similar response object.
+
+    Modern langchain returns tokens in usage_metadata attribute.
+
+    Args:
+        response: AIMessage or similar object from LLM invocation
+
+    Returns:
+        Tuple of (input_tokens, output_tokens)
+    """
+    input_tokens = 0
+    output_tokens = 0
+
+    # Method 1: usage_metadata (modern langchain)
+    if hasattr(response, "usage_metadata") and response.usage_metadata:
+        usage = response.usage_metadata
+        input_tokens = getattr(usage, "input_tokens", 0) or 0
+        output_tokens = getattr(usage, "output_tokens", 0) or 0
+
+    # Method 2: response_metadata.token_usage (OpenAI format)
+    if input_tokens == 0 and output_tokens == 0:
+        if hasattr(response, "response_metadata") and response.response_metadata:
+            metadata = response.response_metadata
+            token_usage = metadata.get("token_usage", {})
+            input_tokens = token_usage.get("prompt_tokens", 0)
+            output_tokens = token_usage.get("completion_tokens", 0)
+
+    return input_tokens, output_tokens
+
+
+async def track_response_tokens(run_id: str, response: Any) -> int:
+    """
+    Extract and track tokens from an LLM response.
+
+    This is a convenience function that extracts tokens from response
+    and triggers the token callback if configured.
+
+    Args:
+        run_id: Run ID for tracking
+        response: AIMessage or similar object from LLM invocation
+
+    Returns:
+        Total tokens (input + output)
+    """
+    input_tokens, output_tokens = extract_tokens_from_response(response)
+    total = input_tokens + output_tokens
+
+    if total > 0:
+        provider = get_llm_provider()
+        if provider._token_callback:
+            try:
+                await provider._token_callback(run_id, input_tokens, output_tokens)
+            except Exception as e:
+                logger.warning(f"Failed to call token callback: {e}")
+
+        logger.debug(f"Tracked tokens for run {run_id}: {input_tokens} in, {output_tokens} out")
+    else:
+        logger.debug(f"No token info in response for run {run_id}")
+
+    return total
