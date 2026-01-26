@@ -35,20 +35,20 @@ export default function RegisterPage() {
   const displayError = validationError || error;
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-blue-50 py-12 px-4">
+    <div className="min-h-screen flex items-center justify-center bg-slate-950 py-12 px-4">
       <div className="max-w-md w-full space-y-8">
         <div>
-          <h1 className="text-3xl font-bold text-center text-blue-900">
+          <h1 className="text-3xl font-bold text-center text-white">
             Damn So Deep Research
           </h1>
-          <h2 className="mt-6 text-center text-xl text-blue-600">
+          <h2 className="mt-6 text-center text-xl text-slate-400">
             Create your account
           </h2>
         </div>
 
         <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
           {displayError && (
-            <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded">
+            <div className="bg-red-900/50 border border-red-400 text-red-200 px-4 py-3 rounded">
               {displayError}
               <button
                 type="button"
@@ -56,7 +56,7 @@ export default function RegisterPage() {
                   setValidationError('');
                   clearError();
                 }}
-                className="float-right text-red-500 hover:text-red-700"
+                className="float-right text-red-300 hover:text-red-100"
               >
                 &times;
               </button>
@@ -65,7 +65,7 @@ export default function RegisterPage() {
 
           <div className="space-y-4">
             <div>
-              <label htmlFor="username" className="block text-sm font-medium text-blue-700">
+              <label htmlFor="username" className="block text-sm font-medium text-slate-300">
                 Username
               </label>
               <input
@@ -76,12 +76,12 @@ export default function RegisterPage() {
                 minLength={3}
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
-                className="mt-1 block w-full px-3 py-2 border border-blue-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                className="mt-1 block w-full px-3 py-2 border border-slate-700 bg-slate-800 text-white placeholder-slate-500 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
               />
             </div>
 
             <div>
-              <label htmlFor="password" className="block text-sm font-medium text-blue-700">
+              <label htmlFor="password" className="block text-sm font-medium text-slate-300">
                 Password
               </label>
               <input
@@ -92,12 +92,12 @@ export default function RegisterPage() {
                 minLength={6}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="mt-1 block w-full px-3 py-2 border border-blue-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                className="mt-1 block w-full px-3 py-2 border border-slate-700 bg-slate-800 text-white placeholder-slate-500 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
               />
             </div>
 
             <div>
-              <label htmlFor="confirmPassword" className="block text-sm font-medium text-blue-700">
+              <label htmlFor="confirmPassword" className="block text-sm font-medium text-slate-300">
                 Confirm Password
               </label>
               <input
@@ -107,7 +107,7 @@ export default function RegisterPage() {
                 required
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
-                className="mt-1 block w-full px-3 py-2 border border-blue-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                className="mt-1 block w-full px-3 py-2 border border-slate-700 bg-slate-800 text-white placeholder-slate-500 rounded-md shadow-sm focus:outline-none focus:ring-primary-500 focus:border-primary-500"
               />
             </div>
           </div>
@@ -115,14 +115,14 @@ export default function RegisterPage() {
           <button
             type="submit"
             disabled={isLoading}
-            className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
+            className="w-full flex justify-center py-2 px-4 border border-transparent rounded-md shadow-sm text-sm font-medium text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:opacity-50"
           >
             {isLoading ? 'Creating account...' : 'Create account'}
           </button>
 
-          <p className="text-center text-sm text-blue-600">
+          <p className="text-center text-sm text-slate-400">
             Already have an account?{' '}
-            <Link to="/login" className="text-blue-600 hover:text-blue-500">
+            <Link to="/login" className="text-primary-400 hover:text-primary-300 underline">
               Sign in
             </Link>
           </p>
