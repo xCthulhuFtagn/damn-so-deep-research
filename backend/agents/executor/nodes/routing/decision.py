@@ -1,18 +1,68 @@
 """
 Decision node - LLM decides which tool to use next or if done.
 
-Uses structured output parsing for reliable decision extraction.
+Uses structured output for reliable decision extraction.
 """
 
-import json
 import logging
-import re
-from typing import Any
+from typing import Annotated, Literal, Optional, Union
+
+from pydantic import BaseModel, Field
 
 from backend.agents.state import ExecutorDecision, ResearchState
 from backend.core.llm import get_llm
 
 logger = logging.getLogger(__name__)
+
+
+class BaseToolParams(BaseModel):
+    """Base class for tool parameters."""
+
+    pass
+
+
+class WebSearchParams(BaseToolParams):
+    """Parameters for web_search tool."""
+
+    tool: Literal["web_search"] = "web_search"
+    themes: list[str] = Field(description="List of search queries to execute")
+
+
+class TerminalParams(BaseToolParams):
+    """Parameters for terminal tool."""
+
+    tool: Literal["terminal"] = "terminal"
+    command: str = Field(description="Shell command to execute")
+    timeout: int = Field(default=60, description="Timeout in seconds")
+
+
+class ReadFileParams(BaseToolParams):
+    """Parameters for read_file tool."""
+
+    tool: Literal["read_file"] = "read_file"
+    path: str = Field(description="Path to the file to read")
+    start_line: Optional[int] = Field(default=None, description="Starting line number")
+    end_line: Optional[int] = Field(default=None, description="Ending line number")
+
+
+class KnowledgeParams(BaseToolParams):
+    """Parameters for knowledge tool."""
+
+    tool: Literal["knowledge"] = "knowledge"
+    answer: str = Field(description="Knowledge-based answer to provide")
+
+
+ToolParams = Annotated[
+    Union[WebSearchParams, TerminalParams, ReadFileParams, KnowledgeParams],
+    Field(discriminator="tool"),
+]
+
+
+class ToolDecision(BaseModel):
+    """Schema for tool decision response."""
+
+    reasoning: str = Field(description="1-2 sentences explaining the choice")
+    params: ToolParams = Field(description="Tool selection and its parameters")
 
 DECISION_PROMPT = """You are an executor agent deciding which tool to use to gather information for a research task.
 
@@ -31,25 +81,18 @@ ACCUMULATED RESULTS SO FAR:
 REMAINING CALLS: {remaining_calls}
 
 AVAILABLE TOOLS:
-1. web_search - Search the web for information. Params: {{"themes": ["query1", "query2", ...]}}
-2. terminal - Execute a shell command (requires approval). Params: {{"command": "the command", "timeout": 60}}
-3. read_file - Read a local file. Params: {{"path": "/path/to/file", "start_line": 1, "end_line": 100}}
-4. knowledge - Answer from your own knowledge (use sparingly). Params: {{"answer": "your knowledge-based answer"}}
-
-OUTPUT FORMAT (strict):
-REASONING: <1-2 sentences explaining your choice>
-DECISION: web_search | terminal | read_file | knowledge | DONE
-PARAMS: <JSON object with tool parameters, or {{}} if DONE>
+1. web_search - Search the web for information
+2. terminal - Execute a shell command (requires approval)
+3. read_file - Read a local file
+4. knowledge - Answer from your own knowledge (use sparingly)
 
 GUIDELINES:
 - Prefer web_search for most information gathering
 - Use terminal only when you need to run commands (e.g., check versions, run scripts)
 - Use read_file when you need to examine specific local files
 - Use knowledge only for well-established facts that don't need verification
-- Choose DONE when you have gathered sufficient information for the task
 - If you have feedback from a previous attempt, use it to guide your approach
-
-Respond with REASONING, DECISION, and PARAMS only."""
+- Always choose the most appropriate tool for the next step"""
 
 
 def _format_tool_history(history: list[dict]) -> str:
@@ -87,35 +130,10 @@ def _format_accumulated_results(history: list[dict]) -> str:
     return "\n\n".join(lines)
 
 
-def _parse_decision_response(response: str) -> ExecutorDecision:
-    """Parse the structured response from the LLM."""
-    # Extract REASONING
-    reasoning_match = re.search(r"REASONING:\s*(.+?)(?=\nDECISION:)", response, re.DOTALL)
-    reasoning = reasoning_match.group(1).strip() if reasoning_match else ""
-
-    # Extract DECISION
-    decision_match = re.search(r"DECISION:\s*(web_search|terminal|read_file|knowledge|DONE)", response, re.IGNORECASE)
-    decision = decision_match.group(1).lower() if decision_match else "DONE"
-
-    # Normalize DONE to uppercase
-    if decision == "done":
-        decision = "DONE"
-
-    # Extract PARAMS
-    params_match = re.search(r"PARAMS:\s*(\{.*\})", response, re.DOTALL)
-    params = {}
-    if params_match:
-        try:
-            params = json.loads(params_match.group(1))
-        except json.JSONDecodeError:
-            logger.warning(f"Failed to parse PARAMS JSON: {params_match.group(1)}")
-            params = {}
-
-    return ExecutorDecision(
-        reasoning=reasoning,
-        decision=decision,
-        params=params,
-    )
+def _extract_params(result: ToolDecision) -> dict:
+    """Extract params dict from the tool params, excluding the discriminator field."""
+    params = result.params.model_dump(exclude={"tool"})
+    return params
 
 
 async def decision_node(state: ResearchState) -> dict:
@@ -143,7 +161,10 @@ async def decision_node(state: ResearchState) -> dict:
 
     remaining_calls = max_calls - call_count
 
-    logger.info(f"Decision node for run {run_id}, step {current_step}, remaining calls: {remaining_calls}")
+    logger.info(
+        f"[Iteration {call_count + 1}/{max_calls}] Decision node for run {run_id}, "
+        f"step {current_step}, {remaining_calls} calls remaining"
+    )
 
     # Build feedback section if we have feedback from a previous attempt
     feedback_section = ""
@@ -161,14 +182,23 @@ async def decision_node(state: ResearchState) -> dict:
         remaining_calls=remaining_calls,
     )
 
-    # Call LLM
+    # Call LLM with structured output
     llm = get_llm(temperature=0.3, run_id=run_id)
-    response = await llm.ainvoke(prompt)
+    structured_llm = llm.with_structured_output(ToolDecision)
+    result: ToolDecision = await structured_llm.ainvoke(prompt)
 
-    # Parse response
-    decision = _parse_decision_response(response.content)
+    # Convert to ExecutorDecision format
+    tool_choice = result.params.tool
+    decision = ExecutorDecision(
+        reasoning=result.reasoning,
+        decision=tool_choice,
+        params=_extract_params(result),
+    )
 
-    logger.info(f"Decision: {decision['decision']} - {decision['reasoning'][:100]}...")
+    logger.info(
+        f"[Iteration {call_count + 1}/{max_calls}] Decision: {tool_choice} - "
+        f"{result.reasoning[:100]}..."
+    )
 
     return {
         "executor_decision": decision,

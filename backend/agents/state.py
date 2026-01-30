@@ -39,7 +39,7 @@ class ExecutorDecision(TypedDict):
     """LLM decision output from the executor router."""
 
     reasoning: str
-    decision: Literal["web_search", "terminal", "read_file", "knowledge", "DONE"]
+    decision: Literal["web_search", "terminal", "read_file", "knowledge"]
     params: dict
 
 
@@ -188,6 +188,7 @@ class ResearchState(TypedDict):
     executor_call_count: Annotated[int, add_or_reset_count]
     max_executor_calls: int  # Default 5
     executor_decision: Annotated[Optional[ExecutorDecision], last_value]
+    executor_sufficient: Annotated[bool, last_value]  # Sufficiency check result
     pending_terminal: Annotated[Optional[dict], last_value]  # {command, hash, timeout}
 
     # --- Human-in-the-Loop ---
@@ -237,6 +238,7 @@ def create_initial_state(
         executor_call_count=0,
         max_executor_calls=config.research.max_executor_calls,
         executor_decision=None,
+        executor_sufficient=False,
         pending_terminal=None,
         # Human-in-the-loop
         pending_approval=None,

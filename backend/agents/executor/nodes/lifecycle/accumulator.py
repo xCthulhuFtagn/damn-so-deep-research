@@ -22,10 +22,18 @@ async def accumulator_node(state: ResearchState) -> dict:
     decision = state.get("executor_decision", {})
     tool_history = state.get("executor_tool_history", [])
     parallel_results = state.get("parallel_search_results", [])
+    call_count = state.get("executor_call_count", 0)
+    max_calls = state.get("max_executor_calls", 5)
 
     last_tool = decision.get("decision", "") if decision else ""
 
-    logger.info(f"Accumulator for run {run_id}, last tool: {last_tool}")
+    # Calculate the iteration number (call_count is updated after this, so +1 for current)
+    iteration = call_count + 1
+
+    logger.info(
+        f"[Iteration {iteration}/{max_calls}] Accumulator for run {run_id}, "
+        f"last tool: {last_tool}, history size: {len(tool_history)}"
+    )
 
     updates = {}
 
@@ -64,9 +72,13 @@ async def accumulator_node(state: ResearchState) -> dict:
         updates["parallel_search_results"] = None  # Clear parallel results
         updates["search_themes"] = []  # Clear themes
 
-        logger.info(f"Merged {len(parallel_results)} search results into tool history")
+        logger.info(
+            f"[Iteration {iteration}/{max_calls}] Merged {len(parallel_results)} "
+            f"search results into tool history"
+        )
 
-    # Update phase back to executing
+    # Update phase back to executing and reset sufficiency flag
     updates["phase"] = "executing"
+    updates["executor_sufficient"] = False  # Reset for next sufficiency check
 
     return updates

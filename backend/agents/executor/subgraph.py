@@ -14,6 +14,7 @@ from backend.agents.executor.nodes import (
     entry_node,
     exit_node,
     accumulator_node,
+    sufficiency_check_node,
     # Routing
     decision_node,
     # Search workflow
@@ -29,7 +30,7 @@ from backend.agents.executor.nodes import (
 )
 from backend.agents.executor.routing import (
     route_decision,
-    route_accumulator,
+    route_sufficiency_check,
     executor_fanout_searches,
 )
 
@@ -41,15 +42,17 @@ def build_executor_subgraph() -> StateGraph:
     Build the executor subgraph.
 
     Graph structure:
-        entry -> decision --[choice]--> web_search: theme_identifier -> search_dispatcher -> fanout -> search_worker -> search_merger -> accumulator
-                     |                  terminal: terminal_prepare -> terminal_execute -> accumulator
-                     |                  read_file: file_reader -> accumulator
-                     |                  knowledge: knowledge -> accumulator
-                     |                  DONE: exit
+        entry -> decision --[tool]--> web_search: theme_identifier -> ... -> accumulator
+                     ^                terminal: terminal_prepare -> terminal_execute -> accumulator
+                     |                read_file: file_reader -> accumulator
+                     |                knowledge: knowledge -> accumulator
                      |
-                     +<---- accumulator (loop if not done & < limit)
+                     +<---- sufficiency_check <---- accumulator
                                  |
-                               exit -> (returns to parent graph)
+                         [limit reached / sufficient?]
+                                 |
+                          yes: exit -> (returns to parent graph)
+                          no: decision (loop)
     """
     logger.info("Building executor subgraph")
 
@@ -60,6 +63,7 @@ def build_executor_subgraph() -> StateGraph:
     builder.add_node("entry", entry_node)
     builder.add_node("exit", exit_node)
     builder.add_node("accumulator", accumulator_node)
+    builder.add_node("sufficiency_check", sufficiency_check_node)
 
     # Routing
     builder.add_node("decision", decision_node)
@@ -82,16 +86,15 @@ def build_executor_subgraph() -> StateGraph:
     builder.add_edge("entry", "decision")
 
     # --- Decision Conditional Edges ---
-    # NEW: web_search path now goes through theme_identifier first
+    # Decision always picks a tool, sufficiency_check handles exit
     builder.add_conditional_edges(
         "decision",
         route_decision,
         {
-            "web_search": "theme_identifier",  # theme_id is AFTER decision
+            "web_search": "theme_identifier",
             "terminal": "terminal_prepare",
             "read_file": "file_reader",
             "knowledge": "knowledge",
-            "exit": "exit",
         },
     )
 
@@ -118,10 +121,13 @@ def build_executor_subgraph() -> StateGraph:
     builder.add_edge("file_reader", "accumulator")
     builder.add_edge("knowledge", "accumulator")
 
-    # --- Accumulator Loop ---
+    # --- Accumulator -> Sufficiency Check (always) ---
+    builder.add_edge("accumulator", "sufficiency_check")
+
+    # --- Sufficiency Check -> Continue or Exit ---
     builder.add_conditional_edges(
-        "accumulator",
-        route_accumulator,
+        "sufficiency_check",
+        route_sufficiency_check,
         {
             "decision": "decision",
             "exit": "exit",

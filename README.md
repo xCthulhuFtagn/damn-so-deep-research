@@ -5,7 +5,7 @@ A **FastAPI + React** application for deep automated research powered by **LangG
 ## Key Features
 
 - **LangGraph Multi-Agent Architecture**: Specialized agents (Planner, Executor Subgraph, Evaluator, Strategist, Reporter) work together using a StateGraph
-- **Flexible Executor Subgraph**: Multi-tool executor supporting web search, terminal commands, file reading, and LLM knowledge with an iterative loop
+- **Flexible Executor Subgraph**: Multi-tool executor supporting web search, terminal commands, file reading, and LLM knowledge with iterative loop and LLM-based sufficiency checking
 - **Parallel Search**: Execute multiple web searches simultaneously using LangGraph's Send API (fan-out/fan-in by themes)
 - **Checkpoint Persistence**: Built-in pause/resume with AsyncSqliteSaver — stop research and continue later
 - **Human-in-the-Loop**: Command approval system with interrupt_before/after for secure terminal execution
@@ -134,7 +134,12 @@ This starts:
 │                    │     └─────────┴───────┴───────┘      │    │
 │                    │                    ▼                 │    │
 │                    │  ┌─────────────────────────────────┐ │    │
-│                    │  │     Accumulator (loop/exit)     │ │    │
+│                    │  │          Accumulator            │ │    │
+│                    │  └───────────────┬─────────────────┘ │    │
+│                    │                  ▼                   │    │
+│                    │  ┌─────────────────────────────────┐ │    │
+│                    │  │   Sufficiency Check (LLM eval)  │ │    │
+│                    │  │      loop ↑ or exit →           │ │    │
 │                    │  └─────────────────────────────────┘ │    │
 │                    └──────────────────┬───────────────────┘    │
 │                                       ▼                        │
@@ -167,23 +172,29 @@ A flexible multi-tool subgraph that replaces the simple search chain. Supports i
 
 **Components:**
 - **Entry**: Discovers current step, initializes executor state, preserves strategist feedback
-- **Decision**: LLM-based tool selection that sees feedback from previous failed attempts
+- **Decision**: LLM-based tool selection (always picks a tool, uses structured output with Pydantic schemas)
 - **Tools**:
   - `web_search` — Parallel web searches via Send API (through theme_identifier)
   - `terminal` — Shell command execution (with approval support)
   - `read_file` — Local file reading with line range support
   - `knowledge` — LLM built-in knowledge for established facts
 - **Theme Identifier**: Generates search queries for web_search (only called when web_search is chosen)
-- **Accumulator**: Collects results and decides to loop or exit
+- **Accumulator**: Collects and merges tool results
+- **Sufficiency Check**: LLM evaluates if gathered information is sufficient (after 1+ tool calls). Exits if limit reached or info is sufficient, otherwise loops back to Decision
 - **Exit**: Prepares findings for the evaluator
 
 **Flow:**
 ```
-entry → decision → [tool path] → accumulator → decision (loop) or exit
+entry → decision → [tool] → accumulator → sufficiency_check → decision (loop) or exit
                       ↓
         web_search: theme_identifier → search_dispatcher → ...
         terminal: terminal_prepare → terminal_execute → ...
         other tools: direct execution
+
+Sufficiency check (after each tool call):
+  - If call limit reached → exit
+  - If no tools called yet → skip LLM check, continue
+  - Otherwise → LLM evaluates if info is SUFFICIENT or CONTINUE
 ```
 
 **Configuration:**
@@ -283,13 +294,13 @@ graph TD
         Decision -->|terminal| Terminal[Terminal]
         Decision -->|read_file| ReadFile[Read File]
         Decision -->|knowledge| Knowledge[Knowledge]
-        Decision -->|DONE| Exit[Exit]
         WebSearch --> Accum[Accumulator]
         Terminal --> Accum
         ReadFile --> Accum
         Knowledge --> Accum
-        Accum -->|loop| Decision
-        Accum -->|exit| Exit
+        Accum --> SuffCheck{Sufficiency Check}
+        SuffCheck -->|CONTINUE| Decision
+        SuffCheck -->|SUFFICIENT| Exit[Exit]
     end
 
     Exit --> Evaluator
@@ -319,6 +330,7 @@ class ResearchState(TypedDict):
     executor_call_count: int                       # Calls in current cycle
     max_executor_calls: int                        # Limit (default 5)
     executor_decision: Optional[ExecutorDecision]  # Decision node's choice
+    executor_sufficient: bool                      # Sufficiency check result
     pending_terminal: Optional[dict]               # Terminal awaiting approval
     last_error: Optional[str]                      # Feedback from strategist (for retry)
 
@@ -335,7 +347,7 @@ class ExecutorToolCall(TypedDict):
 
 class ExecutorDecision(TypedDict):
     reasoning: str
-    decision: Literal["web_search", "terminal", "read_file", "knowledge", "DONE"]
+    decision: Literal["web_search", "terminal", "read_file", "knowledge"]
     params: dict
 ```
 
@@ -353,6 +365,7 @@ LangGraph uses **reducers** to merge updates from multiple nodes into the state.
 | `executor_tool_history` | `append_or_reset_tool_history` | Appends single item; list replaces; `None` resets |
 | `executor_call_count` | `add_or_reset_count` | Increments; `0` resets |
 | `executor_decision`, `pending_terminal` | `last_value` | Last write wins |
+| `executor_sufficient` | `last_value` | Sufficiency check result (reset by accumulator) |
 | `last_error` | `last_value` | Strategist feedback for decision node |
 
 **Example: Parallel Search Fan-out/Fan-in**
@@ -407,9 +420,9 @@ Core orchestration logic using LangGraph.
     - `reporter.py`: Synthesizes all accumulated findings into a final, structured Markdown report.
 - **`executor/`**: Flexible multi-tool executor subgraph.
     - `subgraph.py`: Builds and assembles the executor subgraph with all nodes and edges.
-    - `routing.py`: Conditional edge functions for tool routing and loop control.
-    - `nodes/lifecycle/`: Entry (step discovery, state init) and Exit nodes.
-    - `nodes/routing/`: Decision node (LLM tool selection with feedback awareness).
+    - `routing.py`: Conditional edge functions for tool routing and sufficiency check.
+    - `nodes/lifecycle/`: Entry, Exit, Accumulator, and Sufficiency Check nodes.
+    - `nodes/routing/`: Decision node (LLM tool selection with Pydantic structured output).
     - `nodes/search/`: Theme identifier and search workflow nodes.
     - `nodes/tools/`: Terminal, file reader, and knowledge tool nodes.
 - **`parallel/`**: Logic for concurrent operations.

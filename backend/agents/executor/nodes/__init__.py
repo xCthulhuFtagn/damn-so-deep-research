@@ -2,7 +2,7 @@
 Executor subgraph node functions.
 
 Organized into subdirectories by concern:
-- lifecycle/: Graph control flow (entry, exit, accumulator)
+- lifecycle/: Graph control flow (entry, exit, accumulator, sufficiency_check)
 - routing/: Decision making (decision)
 - search/: Web search workflow (theme_identifier, dispatcher, worker, merger)
 - tools/: Tool execution (terminal_prepare, terminal_execute, file_reader, knowledge)
@@ -13,6 +13,7 @@ from backend.agents.executor.nodes.lifecycle import (
     entry_node,
     exit_node,
     accumulator_node,
+    sufficiency_check_node,
 )
 
 # Routing nodes
@@ -39,6 +40,7 @@ __all__ = [
     "entry_node",
     "exit_node",
     "accumulator_node",
+    "sufficiency_check_node",
     # Routing
     "decision_node",
     # Search workflow

@@ -18,15 +18,13 @@ def route_decision(state: ResearchState) -> str:
     """
     Route based on decision node's tool choice.
 
-    Returns the tool node name or "exit" if DONE.
+    Returns the tool node name. Decision node always picks a tool,
+    sufficiency_check handles the exit decision.
     """
     decision = state.get("executor_decision", {})
-    choice = decision.get("decision", "DONE") if decision else "DONE"
+    choice = decision.get("decision", "web_search") if decision else "web_search"
 
     logger.debug(f"Routing decision: {choice}")
-
-    if choice == "DONE":
-        return "exit"
 
     # Map decision to node names (these match the subgraph.py conditional edge keys)
     tool_map = {
@@ -36,32 +34,27 @@ def route_decision(state: ResearchState) -> str:
         "knowledge": "knowledge",
     }
 
-    return tool_map.get(choice, "exit")
+    return tool_map.get(choice, "web_search")
 
 
-def route_accumulator(state: ResearchState) -> Literal["decision", "exit"]:
+def route_sufficiency_check(state: ResearchState) -> Literal["decision", "exit"]:
     """
-    Decide whether to continue the loop or exit.
+    Route based on sufficiency check result.
 
-    Exits if:
-    - Decision was DONE
-    - Call limit reached
+    Exits if LLM determined we have sufficient information
+    (or call limit was reached, checked in sufficiency_check_node).
+
+    Otherwise, continue to decision for more tool calls.
     """
-    decision = state.get("executor_decision", {})
+    is_sufficient = state.get("executor_sufficient", False)
     call_count = state.get("executor_call_count", 0)
     max_calls = state.get("max_executor_calls", 5)
 
-    # Check if LLM decided we're done
-    if decision and decision.get("decision") == "DONE":
-        logger.info("Accumulator: LLM decided DONE, exiting")
+    if is_sufficient:
+        logger.info(f"[Iteration {call_count}] Sufficiency check: SUFFICIENT, exiting loop")
         return "exit"
 
-    # Check call limit
-    if call_count >= max_calls:
-        logger.info(f"Accumulator: Call limit reached ({call_count}/{max_calls}), exiting")
-        return "exit"
-
-    logger.debug(f"Accumulator: Continuing loop ({call_count}/{max_calls} calls)")
+    logger.debug(f"[Iteration {call_count}] Sufficiency check: CONTINUE ({call_count}/{max_calls} calls)")
     return "decision"
 
 
