@@ -41,15 +41,15 @@ def build_executor_subgraph() -> StateGraph:
     Build the executor subgraph.
 
     Graph structure:
-        theme_identifier -> entry -> decision --[choice]--> search_dispatcher -> fanout -> search_worker -> search_merger -> accumulator
-                                        |                   terminal_prepare -> terminal_execute -> accumulator
-                                        |                   file_reader -> accumulator
-                                        |                   knowledge -> accumulator
-                                        |                   DONE -> exit
-                                        |
-                                        +<---- accumulator (loop if not done & < limit)
-                                                    |
-                                                  exit -> (returns to parent graph)
+        entry -> decision --[choice]--> web_search: theme_identifier -> search_dispatcher -> fanout -> search_worker -> search_merger -> accumulator
+                     |                  terminal: terminal_prepare -> terminal_execute -> accumulator
+                     |                  read_file: file_reader -> accumulator
+                     |                  knowledge: knowledge -> accumulator
+                     |                  DONE: exit
+                     |
+                     +<---- accumulator (loop if not done & < limit)
+                                 |
+                               exit -> (returns to parent graph)
     """
     logger.info("Building executor subgraph")
 
@@ -77,16 +77,17 @@ def build_executor_subgraph() -> StateGraph:
     builder.add_node("knowledge", knowledge_node)
 
     # --- Entry Point ---
-    builder.set_entry_point("theme_identifier")
-    builder.add_edge("theme_identifier", "entry")
+    # NEW: entry → decision (decision sees feedback and picks tool)
+    builder.set_entry_point("entry")
     builder.add_edge("entry", "decision")
 
     # --- Decision Conditional Edges ---
+    # NEW: web_search path now goes through theme_identifier first
     builder.add_conditional_edges(
         "decision",
         route_decision,
         {
-            "web_search": "search_dispatcher",
+            "web_search": "theme_identifier",  # theme_id is AFTER decision
             "terminal": "terminal_prepare",
             "read_file": "file_reader",
             "knowledge": "knowledge",
@@ -95,7 +96,8 @@ def build_executor_subgraph() -> StateGraph:
     )
 
     # --- Web Search Path ---
-    # search_dispatcher -> fanout -> search_worker (parallel) -> search_merger -> accumulator
+    # theme_identifier -> search_dispatcher -> fanout -> search_worker (parallel) -> search_merger -> accumulator
+    builder.add_edge("theme_identifier", "search_dispatcher")
     builder.add_conditional_edges(
         "search_dispatcher",
         executor_fanout_searches,

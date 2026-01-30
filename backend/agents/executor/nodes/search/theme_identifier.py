@@ -1,8 +1,8 @@
 """
-Theme identifier node - identifies search themes for the current plan step.
+Theme identifier node - generates search themes for web_search tool.
 
-Analyzes the current plan step and determines what to search for.
-This is the first step in the executor subgraph.
+Called AFTER decision node chooses web_search.
+Generates search queries based on the task description or uses themes from decision params.
 """
 
 import logging
@@ -47,100 +47,53 @@ def parse_search_themes(content: str) -> list[str]:
 
 async def theme_identifier_node(state: ResearchState) -> dict:
     """
-    Identifies search themes for the current plan step.
+    Generate search themes for web_search tool.
 
-    This is the first node in the executor subgraph, replacing the
-    old identify_themes node from the main graph.
-
-    Handles:
-    - Finding current step (IN_PROGRESS or first TODO)
-    - Using strategist-provided themes if available (recovery scenario)
-    - Generating new themes via LLM
-    - Marking step as IN_PROGRESS
+    Called after decision node chooses web_search. Handles:
+    - Using themes from decision params if provided
+    - Generating new themes via LLM from task description
     """
     run_id = state["run_id"]
     plan = state["plan"]
     current_idx = state["current_step_index"]
+    decision = state.get("executor_decision", {})
+    params = decision.get("params", {})
 
     logger.info(f"Theme identifier for run {run_id}, step {current_idx}")
 
-    # Check if we have more steps to process
-    todo_steps = [s for s in plan if s["status"] == "TODO"]
-    if not todo_steps:
-        logger.info("No more TODO steps")
-        return {
-            "search_themes": [],
-            "phase": "reporting",
-        }
+    # If decision already has themes, use them
+    if params.get("themes"):
+        themes = params["themes"]
+        logger.info(f"Using {len(themes)} themes from decision params: {themes}")
+        return {"search_themes": themes}
 
-    # Get current step - check for IN_PROGRESS first (recovery scenario)
-    current_step = None
-    for i, step in enumerate(plan):
-        if step["status"] == "IN_PROGRESS":
-            current_step = step
-            current_idx = i
-            break
+    # Get current task description
+    task_description = ""
+    if current_idx < len(plan):
+        task_description = plan[current_idx].get("description", "")
 
-    # If no IN_PROGRESS step, find first TODO
-    if not current_step:
-        for i, step in enumerate(plan):
-            if step["status"] == "TODO":
-                current_step = step
-                current_idx = i
-                break
+    if not task_description:
+        logger.warning("No task description found, using original query")
+        task_description = state.get("original_query", "research topic")
 
-    if not current_step:
-        logger.info("No TODO/IN_PROGRESS steps found")
-        return {
-            "search_themes": [],
-            "phase": "reporting",
-        }
-
-    # Check if strategist already provided search_themes (recovery scenario)
-    existing_themes = state.get("search_themes", [])
-    if existing_themes and current_step["status"] == "IN_PROGRESS":
-        # Strategist already generated alternative queries - use them directly
-        logger.info(
-            f"Using {len(existing_themes)} themes from strategist: {existing_themes}"
-        )
-        return {
-            "current_step_index": current_idx,
-            "step_findings": [],
-            "step_search_count": 0,
-            "phase": "executing",
-            # search_themes already set by strategist
-        }
-
-    # Mark step as in progress (if not already)
-    updated_plan = plan.copy()
-    if current_step["status"] == "TODO":
-        updated_plan[current_idx] = {**current_step, "status": "IN_PROGRESS"}
-
-    # Identify search themes
+    # Generate themes via LLM
     llm = get_llm(temperature=0.0)
 
     messages = [
         SystemMessage(content=THEME_IDENTIFICATION_PROMPT),
-        SystemMessage(content=f"Research task: {current_step['description']}"),
+        SystemMessage(content=f"Research task: {task_description}"),
     ]
 
     response = await llm.ainvoke(messages)
     themes = parse_search_themes(response.content)
 
     if not themes:
-        # Fallback: use the step description as a single query
-        themes = [current_step["description"]]
+        # Fallback: use the task description as a single query
+        themes = [task_description]
 
     # Limit to max 3 themes
     themes = themes[:3]
 
-    logger.info(f"Identified {len(themes)} search themes: {themes}")
+    logger.info(f"Generated {len(themes)} search themes: {themes}")
 
-    return {
-        "plan": updated_plan,
-        "current_step_index": current_idx,
-        "search_themes": themes,
-        "step_findings": [],
-        "step_search_count": 0,
-        "phase": "executing",
-    }
+    return {"search_themes": themes}

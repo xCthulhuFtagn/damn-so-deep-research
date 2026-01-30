@@ -21,8 +21,8 @@ CURRENT TASK:
 
 ORIGINAL QUERY:
 {original_query}
-
-PREVIOUS TOOL CALLS:
+{feedback_section}
+PREVIOUS TOOL CALLS (this attempt):
 {tool_history}
 
 ACCUMULATED RESULTS SO FAR:
@@ -47,7 +47,7 @@ GUIDELINES:
 - Use read_file when you need to examine specific local files
 - Use knowledge only for well-established facts that don't need verification
 - Choose DONE when you have gathered sufficient information for the task
-- If previous tools failed, try alternative approaches
+- If you have feedback from a previous attempt, use it to guide your approach
 
 Respond with REASONING, DECISION, and PARAMS only."""
 
@@ -124,8 +124,8 @@ async def decision_node(state: ResearchState) -> dict:
 
     Returns executor_decision with the chosen tool and parameters.
 
-    Special case: If search_themes already exist in state (from theme_identifier
-    or strategist), automatically decides to use web_search with those themes.
+    If last_error contains feedback from a previous failed attempt (from strategist),
+    it is included in the prompt to help guide the decision.
     """
     run_id = state.get("run_id", "")
     current_step = state.get("current_step_index", 0)
@@ -134,6 +134,7 @@ async def decision_node(state: ResearchState) -> dict:
     tool_history = state.get("executor_tool_history", [])
     call_count = state.get("executor_call_count", 0)
     max_calls = state.get("max_executor_calls", 5)
+    feedback = state.get("last_error")
 
     # Get current task description
     task_description = ""
@@ -144,24 +145,17 @@ async def decision_node(state: ResearchState) -> dict:
 
     logger.info(f"Decision node for run {run_id}, step {current_step}, remaining calls: {remaining_calls}")
 
-    # Check for pre-existing search_themes (from theme_identifier or strategist)
-    # If this is the first call (no tool history) and themes exist, use them directly
-    existing_themes = state.get("search_themes", [])
-    if not tool_history and existing_themes:
-        logger.info(f"Decision using pre-existing {len(existing_themes)} themes from theme_identifier/strategist")
-        decision = ExecutorDecision(
-            reasoning="Using search themes from theme_identifier/strategist",
-            decision="web_search",
-            params={"themes": existing_themes},
-        )
-        return {
-            "executor_decision": decision,
-        }
+    # Build feedback section if we have feedback from a previous attempt
+    feedback_section = ""
+    if feedback:
+        feedback_section = f"\nPREVIOUS ATTEMPT FEEDBACK:\n{feedback}\n"
+        logger.info("Including feedback from previous attempt in decision prompt")
 
     # Build prompt
     prompt = DECISION_PROMPT.format(
         task_description=task_description,
         original_query=original_query,
+        feedback_section=feedback_section,
         tool_history=_format_tool_history(tool_history),
         accumulated_results=_format_accumulated_results(tool_history),
         remaining_calls=remaining_calls,

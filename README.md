@@ -123,13 +123,15 @@ This starts:
 │    ┌──────────┐    ┌──────────────────────────────────────┐    │
 │    │ Planner  │───▶│         Executor Subgraph            │    │
 │    └──────────┘    │  ┌───────┐   ┌─────────────────────┐ │    │
-│                    │  │ Entry │──▶│       Router        │ │    │
+│                    │  │ Entry │──▶│      Decision       │ │    │
 │                    │  └───────┘   └──────────┬──────────┘ │    │
 │                    │         ┌───────┬───────┼───────┐    │    │
 │                    │         ▼       ▼       ▼       ▼    │    │
-│                    │     web_search terminal read  know   │    │
-│                    │         │       │       │       │    │    │
-│                    │         └───────┴───────┴───────┘    │    │
+│                    │   theme_id  terminal  read   know    │    │
+│                    │     ↓         │       │       │      │    │
+│                    │  web_search   │       │       │      │    │
+│                    │     │         │       │       │      │    │
+│                    │     └─────────┴───────┴───────┘      │    │
 │                    │                    ▼                 │    │
 │                    │  ┌─────────────────────────────────┐ │    │
 │                    │  │     Accumulator (loop/exit)     │ │    │
@@ -139,9 +141,10 @@ This starts:
 │    ┌──────────┐    ┌───────────┐    ┌──────────┐              │
 │    │Strategist│◀───│ Evaluator │◀───│   Exit   │              │
 │    └────┬─────┘    └───────────┘    └──────────┘              │
-│         │                                                      │
-│         ▼          ┌──────────┐                                │
-│    identify_themes │ Reporter │◀───────────────────────────────│
+│         │ feedback                                             │
+│         └──────────────────────────────┐                       │
+│                    ┌──────────┐        ▼                       │
+│                    │ Reporter │◀─── Executor                   │
 │                    └──────────┘                                │
 │                                                                 │
 │  ┌─────────────────────────────────────────────────────────┐   │
@@ -163,19 +166,24 @@ The system uses **LangGraph StateGraph** with specialized agents and a flexible 
 A flexible multi-tool subgraph that replaces the simple search chain. Supports iterative tool use with a configurable call limit.
 
 **Components:**
-- **Entry**: Resets executor state for a fresh execution cycle
-- **Router**: LLM-based decision maker that selects which tool to use
+- **Entry**: Discovers current step, initializes executor state, preserves strategist feedback
+- **Decision**: LLM-based tool selection that sees feedback from previous failed attempts
 - **Tools**:
-  - `web_search` — Parallel web searches via Send API
+  - `web_search` — Parallel web searches via Send API (through theme_identifier)
   - `terminal` — Shell command execution (with approval support)
   - `read_file` — Local file reading with line range support
   - `knowledge` — LLM built-in knowledge for established facts
+- **Theme Identifier**: Generates search queries for web_search (only called when web_search is chosen)
 - **Accumulator**: Collects results and decides to loop or exit
 - **Exit**: Prepares findings for the evaluator
 
 **Flow:**
 ```
-entry → router → [tool] → accumulator → router (loop) or exit
+entry → decision → [tool path] → accumulator → decision (loop) or exit
+                      ↓
+        web_search: theme_identifier → search_dispatcher → ...
+        terminal: terminal_prepare → terminal_execute → ...
+        other tools: direct execution
 ```
 
 **Configuration:**
@@ -193,8 +201,9 @@ entry → router → [tool] → accumulator → router (loop) or exit
   - `SKIP` → Step not critical, mark SKIPPED, continue to next
 
 #### 4. Strategist
-- **Role**: Recovery from failed substeps
-- **Actions**: Generates alternative search queries for retry
+- **Role**: Recovery from failed executor attempts
+- **Actions**: Analyzes tool history and generates structured feedback for decision node
+- **Output**: Feedback in `last_error` explaining what went wrong and what to try differently
 - **Trigger**: Only when Evaluator returns FAIL and substep budget not exhausted
 
 #### 5. Reporter
@@ -227,21 +236,24 @@ PlanStep {
 │                        Step 0: "Research X"                         │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                     │
-│  Substep 0 (initial):                                               │
-│    identify_themes → ["query A", "query B"]                         │
+│  Attempt 0 (initial):                                               │
+│    entry → decision (picks web_search)                              │
+│    theme_identifier → ["query A", "query B"]                        │
 │    search (parallel) → findings                                     │
 │    evaluator → FAIL (insufficient)                                  │
 │         │                                                           │
 │         ▼                                                           │
-│  Substep 1 (recovery):                                              │
-│    strategist → ["alternative query C", "query D"]                  │
-│    search (parallel) → more findings                                │
+│  Attempt 1 (recovery with feedback):                                │
+│    strategist → generates feedback: "web_search missed X, try Y"    │
+│    entry → decision (sees feedback, may pick different tool)        │
+│    [tool execution] → more findings                                 │
 │    evaluator → FAIL (still insufficient)                            │
 │         │                                                           │
 │         ▼                                                           │
-│  Substep 2 (last chance):                                           │
-│    strategist → ["query E", "query F"]                              │
-│    search (parallel) → findings                                     │
+│  Attempt 2 (last chance):                                           │
+│    strategist → updated feedback based on all attempts              │
+│    entry → decision (sees full history analysis)                    │
+│    [tool execution] → findings                                      │
 │    evaluator → APPROVE (or budget exhausted → FAILED)               │
 │                                                                     │
 └─────────────────────────────────────────────────────────────────────┘
@@ -262,29 +274,29 @@ PlanStep {
 graph TD
     Start[User Query] --> Planner
     Planner -->|Creates Plan| Interrupt1[Plan Review]
-    Interrupt1 -->|Approved| IdentifyThemes[Identify Themes]
-    IdentifyThemes --> ExecutorEntry[Executor Entry]
+    Interrupt1 -->|Approved| ExecutorEntry[Executor Entry]
 
     subgraph Executor Subgraph
-        ExecutorEntry --> Router{Router}
-        Router -->|web_search| WebSearch[Web Search]
-        Router -->|terminal| Terminal[Terminal]
-        Router -->|read_file| ReadFile[Read File]
-        Router -->|knowledge| Knowledge[Knowledge]
-        Router -->|DONE| Exit[Exit]
+        ExecutorEntry --> Decision{Decision}
+        Decision -->|web_search| ThemeID[Theme Identifier]
+        ThemeID --> WebSearch[Web Search]
+        Decision -->|terminal| Terminal[Terminal]
+        Decision -->|read_file| ReadFile[Read File]
+        Decision -->|knowledge| Knowledge[Knowledge]
+        Decision -->|DONE| Exit[Exit]
         WebSearch --> Accum[Accumulator]
         Terminal --> Accum
         ReadFile --> Accum
         Knowledge --> Accum
-        Accum -->|loop| Router
+        Accum -->|loop| Decision
         Accum -->|exit| Exit
     end
 
     Exit --> Evaluator
     Evaluator -->|Success| NextStep{More Steps?}
     Evaluator -->|Failure| Strategist
-    Strategist --> IdentifyThemes
-    NextStep -->|Yes| IdentifyThemes
+    Strategist -->|feedback| ExecutorEntry
+    NextStep -->|Yes| ExecutorEntry
     NextStep -->|No| Reporter
     Reporter --> End[Final Report]
 ```
@@ -306,8 +318,9 @@ class ResearchState(TypedDict):
     executor_tool_history: list[ExecutorToolCall]  # Tool call records
     executor_call_count: int                       # Calls in current cycle
     max_executor_calls: int                        # Limit (default 5)
-    executor_decision: Optional[ExecutorDecision]  # Router's decision
+    executor_decision: Optional[ExecutorDecision]  # Decision node's choice
     pending_terminal: Optional[dict]               # Terminal awaiting approval
+    last_error: Optional[str]                      # Feedback from strategist (for retry)
 
     run_id: str
     user_id: str
@@ -340,6 +353,7 @@ LangGraph uses **reducers** to merge updates from multiple nodes into the state.
 | `executor_tool_history` | `append_or_reset_tool_history` | Appends single item; list replaces; `None` resets |
 | `executor_call_count` | `add_or_reset_count` | Increments; `0` resets |
 | `executor_decision`, `pending_terminal` | `last_value` | Last write wins |
+| `last_error` | `last_value` | Strategist feedback for decision node |
 
 **Example: Parallel Search Fan-out/Fan-in**
 
@@ -389,12 +403,15 @@ Core orchestration logic using LangGraph.
     - `executor.py`: Prepares context for the current step and identifies specific search themes.
     - `search.py`: Executes web searches and merges results into the state findings.
     - `evaluator.py`: Critically assesses findings against step goals to determine completion or failure.
-    - `strategist.py`: Handles recovery logic, adjusting the plan when steps fail or yield insufficient data.
+    - `strategist.py`: Handles recovery logic, analyzing failed attempts and generating structured feedback for the executor's decision node.
     - `reporter.py`: Synthesizes all accumulated findings into a final, structured Markdown report.
 - **`executor/`**: Flexible multi-tool executor subgraph.
     - `subgraph.py`: Builds and assembles the executor subgraph with all nodes and edges.
     - `routing.py`: Conditional edge functions for tool routing and loop control.
-    - `nodes/`: Executor-specific nodes (entry, router, web_search, terminal, read_file, knowledge, accumulator, exit).
+    - `nodes/lifecycle/`: Entry (step discovery, state init) and Exit nodes.
+    - `nodes/routing/`: Decision node (LLM tool selection with feedback awareness).
+    - `nodes/search/`: Theme identifier and search workflow nodes.
+    - `nodes/tools/`: Terminal, file reader, and knowledge tool nodes.
 - **`parallel/`**: Logic for concurrent operations.
     - `search_fanout.py`: Uses LangGraph's `Send` API to trigger multiple search nodes in parallel for different themes.
 

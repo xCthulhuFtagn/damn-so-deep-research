@@ -1,12 +1,11 @@
 """
-Strategist node - recovery from failed substeps.
+Strategist node - recovery from failed executor attempts.
 
-Generates alternative search queries based on previous failed attempts.
+Generates structured feedback for the executor based on previous failed attempts.
 Does NOT create new plan steps - works within the current step's substep budget.
 """
 
 import logging
-import re
 from typing import Literal
 
 from langchain_core.messages import SystemMessage
@@ -19,89 +18,86 @@ logger = logging.getLogger(__name__)
 
 STRATEGIST_PROMPT = """You are a Recovery Strategist for a research system.
 
-A research SUBSTEP has failed. Your job is to suggest ALTERNATIVE SEARCH QUERIES.
+An execution attempt has failed evaluation. Your job is to analyze WHY the attempt failed
+and provide strategic guidance for a different approach.
 
 ORIGINAL RESEARCH QUERY:
 {original_query}
 
-CURRENT STEP:
+CURRENT TASK:
 {step_description}
 
-SUBSTEP ATTEMPT #{substep_number} FAILED:
+EVALUATION ERROR:
 {error}
 
-PREVIOUS ATTEMPTS:
-{previous_attempts}
+TOOLS USED IN THIS ATTEMPT:
+{tool_history}
 
 PARTIAL FINDINGS COLLECTED:
 {partial_findings}
 
 YOUR TASK:
-Generate 1-3 ALTERNATIVE search queries that approach the problem differently.
-
-STRATEGIES TO TRY:
-1. More specific terminology or jargon
-2. Different phrasing / synonyms
-3. Narrower scope (if previous was too broad)
-4. Broader scope (if previous was too narrow)
-5. Alternative sources (academic papers, news, official documents)
-6. Related topics that might contain the answer
+Analyze why the combination of tools and approaches failed to satisfy the task.
+Provide clear, actionable guidance on what to try differently.
 
 OUTPUT FORMAT:
-SEARCH: [alternative query 1]
-SEARCH: [alternative query 2]
-SEARCH: [alternative query 3]
+Write a brief analysis (2-4 sentences) explaining:
+1. What the previous attempt tried and why it didn't work
+2. What different approach or tools should be tried next
 
-RULES:
-- Do NOT repeat previous failed queries
-- Each query should try a distinctly different approach
-- Be specific and actionable"""
+Be specific and strategic. Focus on WHAT to do differently, not just "try harder"."""
 
 
-def parse_search_queries(content: str) -> list[str]:
-    """Parse search queries from strategist response."""
-    queries = []
-    for line in content.strip().split("\n"):
-        line = line.strip()
-        if not line:
-            continue
+def _format_tool_history_for_feedback(tool_history: list[dict]) -> str:
+    """Format tool history into a readable summary for feedback."""
+    if not tool_history:
+        return "(no tools were used)"
 
-        # Match "SEARCH: query" format
-        if line.upper().startswith("SEARCH:"):
-            query = line[7:].strip()
-            if query:
-                queries.append(query)
-            continue
+    lines = []
+    for call in tool_history:
+        tool = call.get("tool", "unknown")
+        params = call.get("params", {})
+        success = call.get("success", False)
+        status = "SUCCESS" if success else "FAILED"
 
-        # Match numbered format: "1. query"
-        match = re.match(r"^\d+[\.\)]\s*(.+)$", line)
-        if match:
-            queries.append(match.group(1).strip())
-            continue
+        # Format based on tool type
+        if tool == "web_search":
+            themes = params.get("themes", [])
+            lines.append(f"- web_search: queries={themes} [{status}]")
+        elif tool == "knowledge":
+            answer = params.get("answer", call.get("result", ""))
+            truncated = answer[:100] + "..." if len(answer) > 100 else answer
+            lines.append(f"- knowledge: (answer: {truncated}) [{status}]")
+        elif tool == "terminal":
+            cmd = params.get("command", "")
+            lines.append(f"- terminal: command=\"{cmd}\" [{status}]")
+        elif tool == "read_file":
+            path = params.get("path", "")
+            lines.append(f"- read_file: path=\"{path}\" [{status}]")
+        else:
+            lines.append(f"- {tool}: {params} [{status}]")
 
-        # Match bullet format: "- query"
-        match = re.match(r"^[\-\*]\s*(.+)$", line)
-        if match:
-            queries.append(match.group(1).strip())
-
-    return queries
+    return "\n".join(lines) if lines else "(no tools were used)"
 
 
 async def strategist_node(
     state: ResearchState,
 ) -> Command[Literal["executor", "reporter"]]:
     """
-    Recovery strategist - generates alternative search queries.
+    Recovery strategist - generates structured feedback for executor retry.
 
-    Does NOT create new plan steps. Instead:
-    - Analyzes previous failed substeps
-    - Generates new search themes for retry
-    - Routes back to executor with context for the SAME step
+    Analyzes the previous failed attempt and generates feedback that includes:
+    - Clear header indicating this is from a PREVIOUS execution cycle
+    - Summary of tools used in the failed attempt
+    - LLM analysis of why the attempt failed and what to try differently
+
+    The feedback is stored in `last_error` for the decision node to use.
     """
     run_id = state["run_id"]
     plan = state["plan"]
     current_idx = state["current_step_index"]
     error = state.get("last_error", "Unknown error")
+    tool_history = state.get("executor_tool_history", [])
 
     logger.info(f"Strategist for run {run_id}, step {current_idx}")
 
@@ -113,64 +109,56 @@ async def strategist_node(
         )
 
     current_step = plan[current_idx]
-    substeps = current_step.get("substeps", [])
-    substep_idx = current_step.get("current_substep_index", 0)
     accumulated = current_step.get("accumulated_findings", [])
 
-    # Build context from previous attempts
-    if substeps:
-        prev_attempts = []
-        for s in substeps:
-            queries_str = ", ".join(s.get("search_queries", []))
-            prev_attempts.append(
-                f"  Attempt {s['id'] + 1}: queries=[{queries_str}], error={s.get('error', 'N/A')[:100]}"
-            )
-        previous_attempts_text = "\n".join(prev_attempts)
-    else:
-        previous_attempts_text = "None (first attempt)"
+    # Format tool history for the prompt
+    tool_history_text = _format_tool_history_for_feedback(tool_history)
 
     partial_text = (
         "\n".join(accumulated[:5]) if accumulated else "No partial findings yet"
     )
 
-    # Generate alternative queries
-    llm = get_llm(temperature=0.5)  # Higher creativity for alternatives
+    # Generate strategic feedback using LLM
+    llm = get_llm(temperature=0.5)
     messages = [
         SystemMessage(
             content=STRATEGIST_PROMPT.format(
                 original_query=state["original_query"],
                 step_description=current_step["description"],
-                substep_number=substep_idx,
                 error=error,
-                previous_attempts=previous_attempts_text,
+                tool_history=tool_history_text,
                 partial_findings=partial_text,
             )
         ),
     ]
 
     response = await llm.ainvoke(messages)
-    alternative_queries = parse_search_queries(response.content)
+    analysis = response.content.strip()
 
-    if not alternative_queries:
-        # Fallback: reformulate the original step description
-        alternative_queries = [
-            f"{current_step['description']} overview",
-            f"{current_step['description']} examples",
-        ]
+    logger.info(f"Generated strategic feedback for retry: {analysis[:100]}...")
 
-    # Limit to 3 queries
-    alternative_queries = alternative_queries[:3]
+    # Build structured feedback for the decision node
+    feedback = f"""Note: This feedback is from a PREVIOUS execution cycle that was evaluated and rejected.
+You are now starting a fresh attempt. Use this feedback to try a different approach.
 
-    logger.info(f"Generated {len(alternative_queries)} alternative queries for retry")
+TASK: {current_step['description']}
 
-    # Route back to executor with new search themes
-    # executor will use these directly since step is IN_PROGRESS
+TOOLS USED IN PREVIOUS ATTEMPT:
+{tool_history_text}
+
+WHY IT FAILED:
+{analysis}"""
+
+    # Route back to executor with feedback in last_error
+    # Clear tool history and search_themes for fresh attempt
     return Command(
         update={
-            "search_themes": alternative_queries,
-            "phase": "searching",
+            "last_error": feedback,
+            "phase": "executing",
             "step_findings": [],  # Clear for new attempt
-            "last_error": None,
+            "search_themes": [],  # Clear - decision will pick new approach
+            "executor_tool_history": [],  # Clear for fresh attempt
+            "executor_call_count": 0,  # Reset call count
         },
         goto="executor",
     )
