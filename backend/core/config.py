@@ -147,7 +147,7 @@ class ResearchSettings(BaseSettings):
     max_searches_per_step: int = Field(default=3, ge=1, le=10, alias="RESEARCH_MAX_SEARCHES_PER_STEP")
 
     # Executor subgraph settings
-    max_executor_calls: int = Field(default=5, ge=1, le=20, alias="RESEARCH_MAX_EXECUTOR_CALLS")
+    max_executor_calls: int = Field(default=3, ge=1, le=20, alias="RESEARCH_MAX_EXECUTOR_CALLS")
     max_file_read_chars: int = Field(default=50000, ge=1000, le=200000, alias="RESEARCH_MAX_FILE_READ_CHARS")
     terminal_output_limit: int = Field(default=2000, ge=100, le=10000, alias="RESEARCH_TERMINAL_OUTPUT_LIMIT")
 

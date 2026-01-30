@@ -533,7 +533,7 @@ Connect to `/ws/{run_id}` for real-time updates:
 | `RESEARCH_MAX_PLAN_STEPS` | `10` | Maximum steps in research plan |
 | `RESEARCH_MAX_SUBSTEPS` | `3` | Recovery attempts per step |
 | `RESEARCH_MAX_SEARCHES_PER_STEP` | `3` | Parallel searches per substep |
-| `RESEARCH_MAX_EXECUTOR_CALLS` | `5` | Max tool calls per executor cycle |
+| `RESEARCH_MAX_EXECUTOR_CALLS` | `3` | Max tool calls per executor cycle |
 | `RESEARCH_MAX_FILE_READ_CHARS` | `50000` | File read character limit |
 | `RESEARCH_TERMINAL_OUTPUT_LIMIT` | `2000` | Terminal output truncation |
 
