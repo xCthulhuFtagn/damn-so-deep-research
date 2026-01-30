@@ -84,12 +84,12 @@ def parse_evaluation(content: str) -> tuple[str, str]:
 
 async def evaluator_node(
     state: ResearchState,
-) -> Command[Literal["identify_themes", "strategist", "reporter"]]:
+) -> Command[Literal["executor", "strategist", "reporter"]]:
     """
     Evaluates findings for the current step.
 
     Routes to:
-    - identify_themes: If approved, move to next step
+    - executor: If approved, move to next step
     - strategist: If failed and critical, attempt recovery
     - reporter: If all steps done
     """
@@ -157,7 +157,7 @@ async def evaluator_node(
                     "phase": "identifying_themes",
                     "step_findings": [],
                 },
-                goto="identify_themes",
+                goto="executor",
             )
         else:
             return Command(
@@ -236,7 +236,7 @@ async def evaluator_node(
                         "phase": "identifying_themes",
                         "step_findings": [],
                     },
-                    goto="identify_themes",
+                    goto="executor",
                 )
             else:
                 return Command(
@@ -264,7 +264,7 @@ async def evaluator_node(
                     "phase": "identifying_themes",
                     "step_findings": [],
                 },
-                goto="identify_themes",
+                goto="executor",
             )
         else:
             return Command(

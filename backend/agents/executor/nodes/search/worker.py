@@ -1,18 +1,19 @@
 """
-Search nodes - parallel search execution and result merging.
+Search worker node - executes a single search query.
 
 Uses LangGraph's Send API for parallel search fan-out.
+Each worker instance handles one search query.
 """
 
 import logging
 from typing import Any
 
-from backend.agents.state import ResearchState, SearchResult
+from backend.agents.state import SearchResult
 
 logger = logging.getLogger(__name__)
 
 
-async def search_node(state: dict[str, Any]) -> dict:
+async def search_worker_node(state: dict[str, Any]) -> dict:
     """
     Execute a single search query.
 
@@ -26,10 +27,10 @@ async def search_node(state: dict[str, Any]) -> dict:
         Dict with search results to merge into parent state
     """
     query = state.get("query", "")
-    logger.info(f"Search node executing query: {query}")
+    logger.info(f"Search worker executing query: {query}")
 
     # Import here to avoid circular imports
-    from backend.tools.search import intelligent_web_search
+    from backend.agents.tools.search import intelligent_web_search
 
     try:
         # Execute search
@@ -54,7 +55,7 @@ async def search_node(state: dict[str, Any]) -> dict:
             sources=sources,
         )
 
-        logger.info(f"Search completed for '{query}': {len(findings)} findings")
+        logger.info(f"Search worker completed for '{query}': {len(findings)} findings")
 
         return {
             "parallel_search_results": [search_result],
@@ -62,7 +63,7 @@ async def search_node(state: dict[str, Any]) -> dict:
         }
 
     except Exception as e:
-        logger.error(f"Search failed for '{query}': {e}")
+        logger.error(f"Search worker failed for '{query}': {e}")
         # Return empty result on error
         return {
             "parallel_search_results": [
@@ -70,36 +71,3 @@ async def search_node(state: dict[str, Any]) -> dict:
             ],
             "step_search_count": 1,
         }
-
-
-async def merge_results_node(state: ResearchState) -> dict:
-    """
-    Merge parallel search results into step findings.
-
-    Called after all parallel searches complete (fan-in).
-    """
-    logger.info(f"Merging search results for run {state['run_id']}")
-
-    parallel_results = state.get("parallel_search_results", [])
-
-    # Combine all findings
-    merged_findings = []
-    all_sources = []
-
-    for result in parallel_results:
-        merged_findings.extend(result.get("findings", []))
-        all_sources.extend(result.get("sources", []))
-
-    # Deduplicate sources
-    unique_sources = list(dict.fromkeys(all_sources))
-
-    logger.info(
-        f"Merged {len(merged_findings)} findings from {len(parallel_results)} searches"
-    )
-
-    return {
-        "step_findings": merged_findings,
-        "parallel_search_results": None,  # Reset signal - clears accumulated results
-        "search_themes": [],  # Clear themes
-        "phase": "evaluating",
-    }

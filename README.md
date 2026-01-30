@@ -4,7 +4,8 @@ A **FastAPI + React** application for deep automated research powered by **LangG
 
 ## Key Features
 
-- **LangGraph Multi-Agent Architecture**: Five specialized agents (Planner, Executor, Evaluator, Strategist, Reporter) work together using a StateGraph
+- **LangGraph Multi-Agent Architecture**: Specialized agents (Planner, Executor Subgraph, Evaluator, Strategist, Reporter) work together using a StateGraph
+- **Flexible Executor Subgraph**: Multi-tool executor supporting web search, terminal commands, file reading, and LLM knowledge with an iterative loop
 - **Parallel Search**: Execute multiple web searches simultaneously using LangGraph's Send API (fan-out/fan-in by themes)
 - **Checkpoint Persistence**: Built-in pause/resume with AsyncSqliteSaver — stop research and continue later
 - **Human-in-the-Loop**: Command approval system with interrupt_before/after for secure terminal execution
@@ -119,17 +120,29 @@ This starts:
 ┌────────────────────────────▼────────────────────────────────────┐
 │                     LangGraph StateGraph                        │
 │                                                                 │
-│    ┌──────────┐    ┌──────────────────┐    ┌──────────┐        │
-│    │ Planner  │───▶│  Parallel Search │───▶│ Evaluator│        │
-│    └──────────┘    │  (Send API)      │    └────┬─────┘        │
-│                    │  ┌────┐ ┌────┐   │         │              │
-│                    │  │ S1 │ │ S2 │...│    ┌────▼─────┐        │
-│                    │  └────┘ └────┘   │    │Strategist│        │
-│                    └──────────────────┘    └────┬─────┘        │
-│                                                 │              │
-│                         ┌──────────┐            │              │
-│                         │ Reporter │◀───────────┘              │
-│                         └──────────┘                           │
+│    ┌──────────┐    ┌──────────────────────────────────────┐    │
+│    │ Planner  │───▶│         Executor Subgraph            │    │
+│    └──────────┘    │  ┌───────┐   ┌─────────────────────┐ │    │
+│                    │  │ Entry │──▶│       Router        │ │    │
+│                    │  └───────┘   └──────────┬──────────┘ │    │
+│                    │         ┌───────┬───────┼───────┐    │    │
+│                    │         ▼       ▼       ▼       ▼    │    │
+│                    │     web_search terminal read  know   │    │
+│                    │         │       │       │       │    │    │
+│                    │         └───────┴───────┴───────┘    │    │
+│                    │                    ▼                 │    │
+│                    │  ┌─────────────────────────────────┐ │    │
+│                    │  │     Accumulator (loop/exit)     │ │    │
+│                    │  └─────────────────────────────────┘ │    │
+│                    └──────────────────┬───────────────────┘    │
+│                                       ▼                        │
+│    ┌──────────┐    ┌───────────┐    ┌──────────┐              │
+│    │Strategist│◀───│ Evaluator │◀───│   Exit   │              │
+│    └────┬─────┘    └───────────┘    └──────────┘              │
+│         │                                                      │
+│         ▼          ┌──────────┐                                │
+│    identify_themes │ Reporter │◀───────────────────────────────│
+│                    └──────────┘                                │
 │                                                                 │
 │  ┌─────────────────────────────────────────────────────────┐   │
 │  │              AsyncSqliteSaver (Checkpointing)           │   │
@@ -139,36 +152,52 @@ This starts:
 
 ### Multi-Agent Architecture
 
-The system uses **LangGraph StateGraph** with five specialized agents:
+The system uses **LangGraph StateGraph** with specialized agents and a flexible executor subgraph:
 
 #### 1. Planner
 - **Role**: Creates a structured research plan (3-10 steps)
 - **Output**: Plan with specific research tasks
 - **Interrupt**: After planning for user review
 
-#### 2. Executor (Theme Identifier)
-- **Role**: Analyzes current step and identifies search themes
-- **Output**: 1-5 parallel search themes per step
-- **Feature**: Triggers parallel fan-out
+#### 2. Executor Subgraph
+A flexible multi-tool subgraph that replaces the simple search chain. Supports iterative tool use with a configurable call limit.
 
-#### 3. Search Nodes (Parallel)
-- **Role**: Execute web searches in parallel using Send API
-- **Tools**: `intelligent_web_search` with SearXNG + Firecrawl
-- **Feature**: True parallelism via LangGraph's fan-out/fan-in
+**Components:**
+- **Entry**: Resets executor state for a fresh execution cycle
+- **Router**: LLM-based decision maker that selects which tool to use
+- **Tools**:
+  - `web_search` — Parallel web searches via Send API
+  - `terminal` — Shell command execution (with approval support)
+  - `read_file` — Local file reading with line range support
+  - `knowledge` — LLM built-in knowledge for established facts
+- **Accumulator**: Collects results and decides to loop or exit
+- **Exit**: Prepares findings for the evaluator
 
-#### 4. Evaluator
+**Flow:**
+```
+entry → router → [tool] → accumulator → router (loop) or exit
+```
+
+**Configuration:**
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `max_executor_calls` | 5 | Maximum tool calls per step |
+| `max_file_read_chars` | 50000 | File reading character limit |
+| `terminal_output_limit` | 2000 | Terminal output truncation |
+
+#### 3. Evaluator
 - **Role**: Validates research findings for each step
 - **Decisions**:
   - `APPROVE` → Findings sufficient, mark step DONE, continue to next
   - `FAIL` → Findings insufficient, trigger Strategist for recovery (if budget remains)
   - `SKIP` → Step not critical, mark SKIPPED, continue to next
 
-#### 5. Strategist
+#### 4. Strategist
 - **Role**: Recovery from failed substeps
 - **Actions**: Generates alternative search queries for retry
 - **Trigger**: Only when Evaluator returns FAIL and substep budget not exhausted
 
-#### 6. Reporter
+#### 5. Reporter
 - **Role**: Generate final research report
 - **Output**: Comprehensive Markdown report synthesizing all findings
 
@@ -233,19 +262,29 @@ PlanStep {
 graph TD
     Start[User Query] --> Planner
     Planner -->|Creates Plan| Interrupt1[Plan Review]
-    Interrupt1 -->|Approved| Executor
-    Executor -->|Identifies Themes| FanOut{Fan-Out}
-    FanOut -->|Theme 1| Search1[Search Node]
-    FanOut -->|Theme 2| Search2[Search Node]
-    FanOut -->|Theme N| SearchN[Search Node]
-    Search1 --> Merge[Merge Results]
-    Search2 --> Merge
-    SearchN --> Merge
-    Merge --> Evaluator
+    Interrupt1 -->|Approved| IdentifyThemes[Identify Themes]
+    IdentifyThemes --> ExecutorEntry[Executor Entry]
+
+    subgraph Executor Subgraph
+        ExecutorEntry --> Router{Router}
+        Router -->|web_search| WebSearch[Web Search]
+        Router -->|terminal| Terminal[Terminal]
+        Router -->|read_file| ReadFile[Read File]
+        Router -->|knowledge| Knowledge[Knowledge]
+        Router -->|DONE| Exit[Exit]
+        WebSearch --> Accum[Accumulator]
+        Terminal --> Accum
+        ReadFile --> Accum
+        Knowledge --> Accum
+        Accum -->|loop| Router
+        Accum -->|exit| Exit
+    end
+
+    Exit --> Evaluator
     Evaluator -->|Success| NextStep{More Steps?}
     Evaluator -->|Failure| Strategist
-    Strategist --> Executor
-    NextStep -->|Yes| Executor
+    Strategist --> IdentifyThemes
+    NextStep -->|Yes| IdentifyThemes
     NextStep -->|No| Reporter
     Reporter --> End[Final Report]
 ```
@@ -257,13 +296,34 @@ class ResearchState(TypedDict):
     messages: Annotated[list, add_messages]  # Conversation history
     plan: list[PlanStep]                     # Research plan
     current_step_index: int                  # Active step
-    phase: Literal["planning", "searching", "evaluating", ...]
+    phase: Literal["planning", "executing", "evaluating", ...]
     search_themes: list[str]                 # Themes for parallel search
     parallel_search_results: list[SearchResult]  # Fan-in results
     step_findings: list[str]                 # Accumulated findings
     pending_approval: Optional[dict]         # Command awaiting approval
+
+    # Executor Subgraph State
+    executor_tool_history: list[ExecutorToolCall]  # Tool call records
+    executor_call_count: int                       # Calls in current cycle
+    max_executor_calls: int                        # Limit (default 5)
+    executor_decision: Optional[ExecutorDecision]  # Router's decision
+    pending_terminal: Optional[dict]               # Terminal awaiting approval
+
     run_id: str
     user_id: str
+
+class ExecutorToolCall(TypedDict):
+    id: int
+    tool: Literal["web_search", "terminal", "read_file", "knowledge"]
+    params: dict
+    result: Optional[str]
+    success: bool
+    error: Optional[str]
+
+class ExecutorDecision(TypedDict):
+    reasoning: str
+    decision: Literal["web_search", "terminal", "read_file", "knowledge", "DONE"]
+    params: dict
 ```
 
 ### State Reducers
@@ -277,6 +337,9 @@ LangGraph uses **reducers** to merge updates from multiple nodes into the state.
 | `step_findings` | `replace_findings` | Last write wins (prevents accumulation) |
 | `step_search_count` | `add_or_reset_count` | Increments; `0` resets |
 | `plan`, `phase`, `current_step_index` | `last_value` / `replace_plan` | Last write wins |
+| `executor_tool_history` | `append_or_reset_tool_history` | Appends single item; list replaces; `None` resets |
+| `executor_call_count` | `add_or_reset_count` | Increments; `0` resets |
+| `executor_decision`, `pending_terminal` | `last_value` | Last write wins |
 
 **Example: Parallel Search Fan-out/Fan-in**
 
@@ -328,6 +391,10 @@ Core orchestration logic using LangGraph.
     - `evaluator.py`: Critically assesses findings against step goals to determine completion or failure.
     - `strategist.py`: Handles recovery logic, adjusting the plan when steps fail or yield insufficient data.
     - `reporter.py`: Synthesizes all accumulated findings into a final, structured Markdown report.
+- **`executor/`**: Flexible multi-tool executor subgraph.
+    - `subgraph.py`: Builds and assembles the executor subgraph with all nodes and edges.
+    - `routing.py`: Conditional edge functions for tool routing and loop control.
+    - `nodes/`: Executor-specific nodes (entry, router, web_search, terminal, read_file, knowledge, accumulator, exit).
 - **`parallel/`**: Logic for concurrent operations.
     - `search_fanout.py`: Uses LangGraph's `Send` API to trigger multiple search nodes in parallel for different themes.
 
@@ -436,6 +503,9 @@ Connect to `/ws/{run_id}` for real-time updates:
 | `RESEARCH_MAX_PLAN_STEPS` | `10` | Maximum steps in research plan |
 | `RESEARCH_MAX_SUBSTEPS` | `3` | Recovery attempts per step |
 | `RESEARCH_MAX_SEARCHES_PER_STEP` | `3` | Parallel searches per substep |
+| `RESEARCH_MAX_EXECUTOR_CALLS` | `5` | Max tool calls per executor cycle |
+| `RESEARCH_MAX_FILE_READ_CHARS` | `50000` | File read character limit |
+| `RESEARCH_TERMINAL_OUTPUT_LIMIT` | `2000` | Terminal output truncation |
 
 ## Development
 

@@ -84,7 +84,7 @@ async def planner_node(
     Outputs:
         - Updates state.plan with PlanStep objects
         - Sets phase to "awaiting_confirmation"
-        - Routes to identify_themes node (after user confirms)
+        - Routes to executor subgraph (after user confirms)
     """
     logger.info(f"Planner node starting for run {state['run_id']}")
 

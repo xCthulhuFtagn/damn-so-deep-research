@@ -7,9 +7,9 @@ Contains tools that can be called by agents:
 - knowledge: Knowledge-based answering
 """
 
-from backend.tools.search import intelligent_web_search
-from backend.tools.filesystem import read_file, execute_command
-from backend.tools.knowledge import answer_from_knowledge
+from backend.agents.tools.search import intelligent_web_search
+from backend.agents.tools.filesystem import read_file, execute_command
+from backend.agents.tools.knowledge import answer_from_knowledge
 
 __all__ = [
     "intelligent_web_search",

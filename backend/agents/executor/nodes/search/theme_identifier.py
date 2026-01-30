@@ -1,14 +1,13 @@
 """
-Executor node - identifies search themes for the current step.
+Theme identifier node - identifies search themes for the current plan step.
 
 Analyzes the current plan step and determines what to search for.
+This is the first step in the executor subgraph.
 """
 
 import logging
-from typing import Literal
 
-from langchain_core.messages import AIMessage, SystemMessage
-from langgraph.types import Command
+from langchain_core.messages import SystemMessage
 
 from backend.agents.state import ResearchState
 from backend.core.llm import get_llm
@@ -46,37 +45,29 @@ def parse_search_themes(content: str) -> list[str]:
     return themes
 
 
-async def identify_themes_node(
-    state: ResearchState,
-) -> dict:
+async def theme_identifier_node(state: ResearchState) -> dict:
     """
     Identifies search themes for the current plan step.
 
-    Returns state updates. Routing is handled by conditional edges:
-    - If needs_replan is True -> routes back to planner
-    - If search_themes is populated -> route_search_fanout fans out to search_node
-    - If search_themes is empty -> routes to merge_results
+    This is the first node in the executor subgraph, replacing the
+    old identify_themes node from the main graph.
+
+    Handles:
+    - Finding current step (IN_PROGRESS or first TODO)
+    - Using strategist-provided themes if available (recovery scenario)
+    - Generating new themes via LLM
+    - Marking step as IN_PROGRESS
     """
     run_id = state["run_id"]
     plan = state["plan"]
     current_idx = state["current_step_index"]
 
-    logger.info(f"Identify themes for run {run_id}, step {current_idx}")
-
-    # Safety check: needs_replan should be handled by route_plan_approval
-    # but keep this as a fallback in case of unexpected state
-    if state.get("needs_replan", False):
-        logger.warning(f"Unexpected needs_replan=True in identify_themes for run {run_id}")
-        return {
-            "needs_replan": True,
-            "phase": "planning",
-        }
+    logger.info(f"Theme identifier for run {run_id}, step {current_idx}")
 
     # Check if we have more steps to process
     todo_steps = [s for s in plan if s["status"] == "TODO"]
     if not todo_steps:
-        logger.info("No more TODO steps, clearing themes for routing")
-        # Empty themes will route to merge_results via conditional edge
+        logger.info("No more TODO steps")
         return {
             "search_themes": [],
             "phase": "reporting",
@@ -99,7 +90,7 @@ async def identify_themes_node(
                 break
 
     if not current_step:
-        logger.info("No TODO/IN_PROGRESS steps found, clearing themes for routing")
+        logger.info("No TODO/IN_PROGRESS steps found")
         return {
             "search_themes": [],
             "phase": "reporting",
@@ -116,7 +107,7 @@ async def identify_themes_node(
             "current_step_index": current_idx,
             "step_findings": [],
             "step_search_count": 0,
-            "phase": "searching",
+            "phase": "executing",
             # search_themes already set by strategist
         }
 
@@ -145,25 +136,11 @@ async def identify_themes_node(
 
     logger.info(f"Identified {len(themes)} search themes: {themes}")
 
-    # Return state update - conditional edge (route_search_fanout) handles routing
     return {
         "plan": updated_plan,
         "current_step_index": current_idx,
         "search_themes": themes,
         "step_findings": [],
         "step_search_count": 0,
-        "phase": "searching",
+        "phase": "executing",
     }
-
-
-async def executor_node(state: ResearchState) -> dict:
-    """
-    Legacy executor node - now just calls identify_themes.
-
-    Kept for compatibility with existing code references.
-    """
-    # This is now handled by identify_themes_node and parallel search
-    raise NotImplementedError(
-        "Use identify_themes_node instead. The executor flow is now: "
-        "identify_themes -> search_fanout -> merge_results -> evaluator"
-    )

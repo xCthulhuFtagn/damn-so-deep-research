@@ -89,14 +89,14 @@ def parse_search_queries(content: str) -> list[str]:
 
 async def strategist_node(
     state: ResearchState,
-) -> Command[Literal["identify_themes", "reporter"]]:
+) -> Command[Literal["executor", "reporter"]]:
     """
     Recovery strategist - generates alternative search queries.
 
     Does NOT create new plan steps. Instead:
     - Analyzes previous failed substeps
     - Generates new search themes for retry
-    - Routes back to identify_themes with context for the SAME step
+    - Routes back to executor with context for the SAME step
     """
     run_id = state["run_id"]
     plan = state["plan"]
@@ -163,8 +163,8 @@ async def strategist_node(
 
     logger.info(f"Generated {len(alternative_queries)} alternative queries for retry")
 
-    # Route back to identify_themes with new search themes
-    # identify_themes will use these directly since step is IN_PROGRESS
+    # Route back to executor with new search themes
+    # executor will use these directly since step is IN_PROGRESS
     return Command(
         update={
             "search_themes": alternative_queries,
@@ -172,5 +172,5 @@ async def strategist_node(
             "step_findings": [],  # Clear for new attempt
             "last_error": None,
         },
-        goto="identify_themes",
+        goto="executor",
     )

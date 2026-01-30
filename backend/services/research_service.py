@@ -144,6 +144,14 @@ class ResearchService:
                     plan_dicts = [dict(step) for step in plan]
                     await notification.notify_plan_confirmation_needed(run_id, plan_dicts)
                     await db.update_run(run_id, status="awaiting_confirmation")
+
+                # If awaiting terminal approval (future feature)
+                elif phase == "awaiting_terminal":
+                    pending = final_state.values.get("pending_terminal", {})
+                    if pending:
+                        logger.info(f"Terminal approval needed for run {run_id}")
+                        await db.update_run(run_id, status="awaiting_terminal")
+                        # Note: Terminal approval UI/API endpoint would be needed
                 return
 
             # Update run status
@@ -217,6 +225,19 @@ class ResearchService:
                     run_id,
                     node_output["search_themes"],
                 )
+
+            # Handle executor subgraph events
+            if "executor_decision" in node_output:
+                decision = node_output["executor_decision"]
+                if decision:
+                    tool = decision.get("decision", "")
+                    if tool and tool != "DONE":
+                        logger.debug(f"Executor using tool: {tool}")
+
+            # Handle pending terminal commands (for future approval flow)
+            if "pending_terminal" in node_output and node_output["pending_terminal"]:
+                pending = node_output["pending_terminal"]
+                logger.info(f"Terminal command pending: {pending.get('command', '')[:50]}...")
 
             # Notify messages
             if "messages" in node_output:
@@ -334,6 +355,11 @@ class ResearchService:
                     plan_dicts = [dict(step) for step in plan]
                     await notification.notify_plan_confirmation_needed(run_id, plan_dicts)
                     await db.update_run(run_id, status="awaiting_confirmation")
+                elif phase == "awaiting_terminal":
+                    pending = final_state.values.get("pending_terminal", {})
+                    if pending:
+                        logger.info(f"Terminal approval needed for run {run_id}")
+                        await db.update_run(run_id, status="awaiting_terminal")
                 return
 
             await db.update_run(run_id, status="completed")
@@ -385,6 +411,125 @@ class ResearchService:
             event.set()
 
         logger.info(f"Approval response handled: {command_hash} = {approved}")
+
+    async def resume_with_terminal_approval(
+        self,
+        run_id: str,
+        approved: bool,
+    ) -> None:
+        """
+        Resume a run that's waiting for terminal command approval.
+
+        Args:
+            run_id: The research run ID
+            approved: Whether the terminal command was approved
+        """
+        logger.info(f"Terminal approval for run {run_id}: {approved}")
+
+        notification = get_notification_service()
+        db = await get_db_service()
+
+        try:
+            graph = await self._get_graph()
+
+            run = await db.get_run(run_id)
+            if not run:
+                logger.error(f"Run not found: {run_id}")
+                return
+
+            config = get_thread_config(run_id, run.user_id)
+            current_state = await graph.aget_state(config)
+
+            if not current_state or not current_state.values:
+                logger.error(f"No state found for run {run_id}")
+                return
+
+            pending = current_state.values.get("pending_terminal", {})
+            if not pending:
+                logger.warning(f"No pending terminal for run {run_id}")
+                return
+
+            if not approved:
+                # Terminal was denied - record as failed and continue
+                from backend.agents.state import ExecutorToolCall
+
+                tool_history = current_state.values.get("executor_tool_history", [])
+                failed_call = ExecutorToolCall(
+                    id=len(tool_history) + 1,
+                    tool="terminal",
+                    params={"command": pending.get("command", "")},
+                    result=None,
+                    success=False,
+                    error="Command execution denied by user",
+                )
+
+                await graph.aupdate_state(
+                    config,
+                    {
+                        "executor_tool_history": failed_call,
+                        "executor_call_count": 1,
+                        "pending_terminal": None,
+                        "phase": "executing",
+                    },
+                )
+
+                await notification.notify_message(
+                    run_id,
+                    "system",
+                    f"Terminal command denied: {pending.get('command', '')[:50]}...",
+                    name="System",
+                )
+            else:
+                # Terminal was approved - clear pending and continue
+                # The terminal_exec node will handle execution
+                await graph.aupdate_state(
+                    config,
+                    {
+                        "phase": "executing",
+                    },
+                )
+
+            # Resume execution
+            await db.update_run(run_id, status="active")
+
+            # Setup token tracking
+            llm_provider = get_llm_provider()
+            llm_provider.set_token_callback(run_id, self._on_tokens)
+            self._run_tokens[run_id] = run.total_tokens
+
+            async for event in graph.astream(None, config, stream_mode="updates"):
+                if run_id in self._pause_flags:
+                    await notification.notify_run_paused(run_id)
+                    self._pause_flags.discard(run_id)
+                    return
+
+                await self._process_graph_event(run_id, event)
+
+            # Check final state
+            final_state = await graph.aget_state(config)
+            if final_state and final_state.next:
+                phase = final_state.values.get("phase", "")
+                if phase == "awaiting_confirmation":
+                    plan = final_state.values.get("plan", [])
+                    plan_dicts = [dict(step) for step in plan]
+                    await notification.notify_plan_confirmation_needed(run_id, plan_dicts)
+                    await db.update_run(run_id, status="awaiting_confirmation")
+                elif phase == "awaiting_terminal":
+                    await db.update_run(run_id, status="awaiting_terminal")
+                return
+
+            await db.update_run(run_id, status="completed")
+            await notification.notify_run_complete(run_id)
+            logger.info(f"Research completed for run {run_id}")
+
+        except Exception as e:
+            logger.exception(f"Terminal approval error for run {run_id}: {e}")
+            await db.update_run(run_id, status="failed")
+            await notification.notify_run_error(run_id, str(e))
+
+        finally:
+            llm_provider = get_llm_provider()
+            llm_provider.clear_token_callback()
 
 
 # Global instance

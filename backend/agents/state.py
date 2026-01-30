@@ -21,6 +21,28 @@ class Substep(TypedDict):
     error: Optional[str]  # Why it failed (if FAILED)
 
 
+# --- Executor Subgraph Types ---
+
+
+class ExecutorToolCall(TypedDict):
+    """Record of a single tool call in the executor subgraph."""
+
+    id: int
+    tool: Literal["web_search", "terminal", "read_file", "knowledge"]
+    params: dict
+    result: Optional[str]
+    success: bool
+    error: Optional[str]
+
+
+class ExecutorDecision(TypedDict):
+    """LLM decision output from the executor router."""
+
+    reasoning: str
+    decision: Literal["web_search", "terminal", "read_file", "knowledge", "DONE"]
+    params: dict
+
+
 class PlanStep(TypedDict):
     """A single step in the research plan."""
 
@@ -86,10 +108,27 @@ def replace_plan(
     """
     Reducer for plan updates - last write wins.
 
-    This allows multiple nodes (e.g., strategist -> identify_themes) to update
+    This allows multiple nodes (e.g., strategist -> executor) to update
     the plan in the same graph step without causing concurrent update errors.
     """
     return new
+
+
+def append_or_reset_tool_history(
+    existing: list[ExecutorToolCall], new
+) -> list[ExecutorToolCall]:
+    """
+    Reducer for executor tool history.
+
+    - If new is None: reset to empty list
+    - If new is a list: full replacement
+    - If new is a single item: append to existing
+    """
+    if new is None:
+        return []
+    if isinstance(new, list):
+        return new  # Full replacement
+    return existing + [new]  # Append single
 
 
 def last_value(existing: Any, new: Any) -> Any:
@@ -129,6 +168,8 @@ class ResearchState(TypedDict):
             "reporting",
             "done",
             "paused",
+            "executing",  # Executor subgraph active
+            "awaiting_terminal",  # Waiting for terminal command approval
         ],
         last_value,
     ]
@@ -141,6 +182,13 @@ class ResearchState(TypedDict):
     # --- Step Execution Tracking ---
     step_search_count: Annotated[int, add_or_reset_count]  # Searches performed in current step
     max_searches_per_step: int  # Limit (default 3)
+
+    # --- Executor Subgraph ---
+    executor_tool_history: Annotated[list[ExecutorToolCall], append_or_reset_tool_history]
+    executor_call_count: Annotated[int, add_or_reset_count]
+    max_executor_calls: int  # Default 5
+    executor_decision: Annotated[Optional[ExecutorDecision], last_value]
+    pending_terminal: Annotated[Optional[dict], last_value]  # {command, hash, timeout}
 
     # --- Human-in-the-Loop ---
     pending_approval: Annotated[Optional[dict], last_value]  # {command: str, hash: str}
@@ -184,6 +232,13 @@ def create_initial_state(
         step_findings=[],
         step_search_count=0,
         max_searches_per_step=config.research.max_searches_per_step,
+        # Executor subgraph defaults
+        executor_tool_history=[],
+        executor_call_count=0,
+        max_executor_calls=config.research.max_executor_calls,
+        executor_decision=None,
+        pending_terminal=None,
+        # Human-in-the-loop
         pending_approval=None,
         pending_question=None,
         user_response=None,

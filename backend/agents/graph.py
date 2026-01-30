@@ -11,17 +11,12 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from backend.agents.state import ResearchState
-from backend.agents.nodes import (
-    planner_node,
-    identify_themes_node,
-    search_node,
-    merge_results_node,
-    evaluator_node,
-    strategist_node,
-    reporter_node,
-)
+from backend.agents.planner import planner_node
+from backend.agents.evaluator import evaluator_node
+from backend.agents.strategist import strategist_node
+from backend.agents.reporter import reporter_node
 from backend.agents.routing import route_plan_approval
-from backend.agents.parallel.search_fanout import fanout_searches
+from backend.agents.executor.subgraph import build_executor_subgraph
 
 logger = logging.getLogger(__name__)
 
@@ -36,26 +31,31 @@ def build_research_graph() -> StateGraph:
     Graph structure:
         START -> planner --[needs_replan?]--> planner (loop)
                     |
-                    +--> identify_themes -> search_fanout
-                                                |
-                                        [parallel searches]
-                                                |
-                                        merge_results -> evaluator
-                                                            |
-                                +---------------------------+---------------------------+
-                                |                           |                           |
-                        identify_themes              strategist                    reporter -> END
-                        (next step)                 (recovery)
+                    +--> executor (subgraph) -> evaluator
+                              |                    |
+                              |    +---------------+---------------+
+                              |    |               |               |
+                              +----+           strategist      reporter -> END
+                           (next step)         (recovery)
+
+    The executor subgraph includes:
+    - search_themes: identifies search queries for current step
+    - router: decides which tool to use
+    - web_search (parallel search fanout)
+    - terminal (with approval)
+    - read_file
+    - knowledge (LLM built-in)
     """
     logger.info("Building research StateGraph")
 
     builder = StateGraph(ResearchState)
 
+    # Build and compile executor subgraph
+    executor_subgraph = build_executor_subgraph().compile()
+
     # --- Add Nodes ---
     builder.add_node("planner", planner_node)
-    builder.add_node("identify_themes", identify_themes_node)
-    builder.add_node("search_node", search_node)
-    builder.add_node("merge_results", merge_results_node)
+    builder.add_node("executor", executor_subgraph)
     builder.add_node("evaluator", evaluator_node)
     builder.add_node("strategist", strategist_node)
     builder.add_node("reporter", reporter_node)
@@ -67,36 +67,23 @@ def build_research_graph() -> StateGraph:
 
     # Planner -> conditional routing based on plan approval
     # If needs_replan=True -> loop back to planner
-    # If approved -> proceed to identify_themes
+    # If approved -> proceed to executor
     builder.add_conditional_edges(
         "planner",
         route_plan_approval,
         {
             "planner": "planner",
-            "identify_themes": "identify_themes",
+            "executor": "executor",
         },
     )
 
-    # Identify themes -> search fanout (conditional)
-    # Routes to: merge_results (no themes), or fan-out to search_node
-    builder.add_conditional_edges(
-        "identify_themes",
-        fanout_searches,
-        {
-            "merge_results": "merge_results",
-        },
-    )
+    # Executor -> evaluator
+    builder.add_edge("executor", "evaluator")
 
-    # Search node -> merge results (fan-in)
-    builder.add_edge("search_node", "merge_results")
-
-    # Merge results -> evaluator
-    builder.add_edge("merge_results", "evaluator")
-
-    # Evaluator routes via Command (to identify_themes, strategist, or reporter)
+    # Evaluator routes via Command (to executor, strategist, or reporter)
     # NO static edge here - Command.goto handles routing dynamically
 
-    # Strategist routes via Command (to identify_themes or reporter)
+    # Strategist routes via Command (to executor or reporter)
     # NO static edge here - Command.goto handles routing dynamically
 
     # Reporter -> END
