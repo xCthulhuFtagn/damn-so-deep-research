@@ -110,6 +110,41 @@ async def websocket_endpoint(websocket: WebSocket, run_id: str):
             "message": "WebSocket connected successfully",
         })
 
+        # Send current state sync
+        from backend.services.research_service import get_research_service
+        try:
+            service = await get_research_service()
+            state = await service.get_state(run_id)
+            is_running = service.is_running(run_id)
+
+            # Convert messages to dicts
+            messages = []
+            if state:
+                for msg in state.get("messages", []):
+                    if hasattr(msg, "content"):
+                        messages.append({
+                            "role": getattr(msg, "type", "unknown"),
+                            "content": msg.content,
+                            "name": getattr(msg, "name", None),
+                        })
+
+            phase = state.get("phase", "idle") if state else "idle"
+            pending_terminal = state.get("pending_terminal") if state else None
+
+            await websocket.send_json({
+                "type": "state_sync",
+                "run_id": run_id,
+                "is_running": is_running,
+                "phase": phase,
+                "plan": state.get("plan", []) if state else [],
+                "current_step_index": state.get("current_step_index", 0) if state else 0,
+                "search_themes": state.get("search_themes", []) if state else [],
+                "messages": messages,
+                "pending_terminal": pending_terminal,
+            })
+        except Exception as e:
+            logger.warning(f"Failed to send state sync for run {run_id}: {e}")
+
         # Keep connection alive and handle incoming messages
         while True:
             try:
@@ -119,6 +154,41 @@ async def websocket_endpoint(websocket: WebSocket, run_id: str):
                 # Handle client commands if needed
                 if data.get("type") == "ping":
                     await websocket.send_json({"type": "pong"})
+                elif data.get("type") == "request_state":
+                    # Client requests state refresh
+                    from backend.services.research_service import get_research_service
+                    try:
+                        service = await get_research_service()
+                        state = await service.get_state(run_id)
+                        is_running = service.is_running(run_id)
+
+                        # Convert messages to dicts
+                        messages = []
+                        if state:
+                            for msg in state.get("messages", []):
+                                if hasattr(msg, "content"):
+                                    messages.append({
+                                        "role": getattr(msg, "type", "unknown"),
+                                        "content": msg.content,
+                                        "name": getattr(msg, "name", None),
+                                    })
+
+                        phase = state.get("phase", "idle") if state else "idle"
+                        pending_terminal = state.get("pending_terminal") if state else None
+
+                        await websocket.send_json({
+                            "type": "state_sync",
+                            "run_id": run_id,
+                            "is_running": is_running,
+                            "phase": phase,
+                            "plan": state.get("plan", []) if state else [],
+                            "current_step_index": state.get("current_step_index", 0) if state else 0,
+                            "search_themes": state.get("search_themes", []) if state else [],
+                            "messages": messages,
+                            "pending_terminal": pending_terminal,
+                        })
+                    except Exception as e:
+                        logger.warning(f"Failed to send state for run {run_id}: {e}")
 
             except WebSocketDisconnect:
                 break

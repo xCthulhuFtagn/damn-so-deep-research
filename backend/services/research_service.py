@@ -117,7 +117,7 @@ class ResearchService:
             # Execute graph
             logger.info(f"Invoking graph for run {run_id}")
 
-            async for event in graph.astream(state, config, stream_mode="updates"):
+            async for namespace, event in graph.astream(state, config, stream_mode="updates", subgraphs=True):
                 # Check pause flag
                 if run_id in self._pause_flags:
                     logger.info(f"Pause requested for run {run_id}")
@@ -209,7 +209,7 @@ class ResearchService:
                     )
 
             # Notify step starts
-            if node_name == "identify_themes":
+            if node_name in ["identify_themes", "theme_identifier"]:
                 plan = node_output.get("plan", [])
                 idx = node_output.get("current_step_index", 0)
                 if idx < len(plan):
@@ -220,11 +220,22 @@ class ResearchService:
                     )
 
             # Notify parallel searches
+            # Only notify if we have themes AND we are in the searching phase (search_dispatcher)
+            # OR if it's the theme_identifier (initial identification)
             if "search_themes" in node_output and node_output["search_themes"]:
-                await notification.notify_search_parallel(
-                    run_id,
-                    node_output["search_themes"],
-                )
+                should_notify = False
+                if node_name == "theme_identifier":
+                    should_notify = True
+                elif node_name == "search_dispatcher":
+                    should_notify = True
+                elif node_output.get("phase") == "searching":
+                    should_notify = True
+                
+                if should_notify:
+                    await notification.notify_search_parallel(
+                        run_id,
+                        node_output["search_themes"],
+                    )
 
             # Handle executor subgraph events
             if "executor_decision" in node_output:
@@ -337,7 +348,7 @@ class ResearchService:
             # Resume execution
             await db.update_run(run_id, status="active")
 
-            async for event in graph.astream(None, config, stream_mode="updates"):
+            async for namespace, event in graph.astream(None, config, stream_mode="updates", subgraphs=True):
                 if run_id in self._pause_flags:
                     await notification.notify_run_paused(run_id)
                     self._pause_flags.discard(run_id)
@@ -497,7 +508,7 @@ class ResearchService:
             llm_provider.set_token_callback(run_id, self._on_tokens)
             self._run_tokens[run_id] = run.total_tokens
 
-            async for event in graph.astream(None, config, stream_mode="updates"):
+            async for namespace, event in graph.astream(None, config, stream_mode="updates", subgraphs=True):
                 if run_id in self._pause_flags:
                     await notification.notify_run_paused(run_id)
                     self._pause_flags.discard(run_id)

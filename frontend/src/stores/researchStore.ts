@@ -343,6 +343,25 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
         set({ isRunning: false, phase: 'paused' });
         break;
 
+      case 'state_sync':
+        // Full state sync from server (sent on reconnect)
+        {
+          const phase = event.phase as string;
+          const messages = event.messages as Message[] || [];
+
+          set({
+            isRunning: event.is_running as boolean,
+            phase: phase,
+            plan: event.plan as PlanStep[],
+            currentStepIndex: event.current_step_index as number,
+            searchThemes: event.search_themes as string[] || [],
+            messages: messages,
+            // Show plan confirmation modal if in awaiting_confirmation phase
+            showPlanConfirmationModal: phase === 'awaiting_confirmation',
+          });
+        }
+        break;
+
       case 'plan_confirmation_needed':
         set({
           plan: event.plan as PlanStep[],

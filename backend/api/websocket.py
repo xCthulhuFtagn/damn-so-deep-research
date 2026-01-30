@@ -170,6 +170,7 @@ class WSEventType:
     RUN_COMPLETE = "run_complete"
     RUN_ERROR = "run_error"
     RUN_PAUSED = "run_paused"
+    STATE_SYNC = "state_sync"
 
 
 def create_ws_event(event_type: str, **data) -> dict:

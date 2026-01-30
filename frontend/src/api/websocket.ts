@@ -31,6 +31,11 @@ export class WebSocketClient {
       console.log('WebSocket connected');
       this.reconnectAttempts = 0;
       this.startPing();
+
+      // Request state sync on connect/reconnect
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({ type: 'request_state' }));
+      }
     };
 
     this.ws.onmessage = (event) => {

@@ -10,7 +10,7 @@ import re
 from typing import Any
 
 from backend.agents.state import ExecutorDecision, ResearchState
-from backend.core.llm import get_llm_provider
+from backend.core.llm import get_llm
 
 logger = logging.getLogger(__name__)
 
@@ -168,14 +168,11 @@ async def decision_node(state: ResearchState) -> dict:
     )
 
     # Call LLM
-    llm = get_llm_provider()
-    response = await llm.chat(
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.3,  # Low temperature for consistent decisions
-    )
+    llm = get_llm(temperature=0.3, run_id=run_id)
+    response = await llm.ainvoke(prompt)
 
     # Parse response
-    decision = _parse_decision_response(response)
+    decision = _parse_decision_response(response.content)
 
     logger.info(f"Decision: {decision['decision']} - {decision['reasoning'][:100]}...")
 

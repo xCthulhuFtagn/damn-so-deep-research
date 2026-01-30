@@ -105,6 +105,7 @@ export type WSEventType =
   | 'run_complete'
   | 'run_error'
   | 'run_paused'
+  | 'state_sync'
   | 'pong';
 
 export interface WSEvent {
@@ -170,4 +171,20 @@ export interface TokenUpdateEvent extends WSEvent {
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
+}
+
+export interface StateSyncEvent extends WSEvent {
+  type: 'state_sync';
+  run_id: string;
+  is_running: boolean;
+  phase: string;
+  plan: PlanStep[];
+  current_step_index: number;
+  search_themes: string[];
+  messages: Message[];
+  pending_terminal?: {
+    command: string;
+    hash: string;
+    timeout?: number;
+  };
 }
