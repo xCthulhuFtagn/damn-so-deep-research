@@ -77,7 +77,7 @@ async def theme_identifier_node(state: ResearchState) -> dict:
         task_description = state.get("original_query", "research topic")
 
     # Generate themes via LLM
-    llm = get_llm(temperature=0.0)
+    llm = get_llm(temperature=0.0, run_id=run_id)
 
     messages = [
         SystemMessage(content=THEME_IDENTIFICATION_PROMPT),

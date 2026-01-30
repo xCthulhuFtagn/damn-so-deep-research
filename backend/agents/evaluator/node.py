@@ -116,7 +116,7 @@ async def evaluator_node(
     logger.info(f"Evaluator processing findings (first 2000 chars): {findings_text[:2000]}...")
 
     # Evaluate
-    llm = get_llm(temperature=0.0)
+    llm = get_llm(temperature=0.0, run_id=state["run_id"])
     messages = [
         SystemMessage(
             content=EVALUATOR_PROMPT.format(

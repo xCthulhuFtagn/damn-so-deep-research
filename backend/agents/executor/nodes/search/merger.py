@@ -36,9 +36,11 @@ async def search_merger_node(state: ResearchState) -> dict:
         f"Merged {len(merged_findings)} findings from {len(parallel_results)} searches"
     )
 
+    # Note: Do NOT clear parallel_search_results here!
+    # The accumulator node needs to process them into executor_tool_history.
+    # Accumulator will clear them after processing.
     return {
         "step_findings": merged_findings,
-        "parallel_search_results": None,  # Reset signal - clears accumulated results
-        "search_themes": [],  # Clear themes
-        "phase": "evaluating",
+        # search_themes cleared here since dispatcher already used them
+        "search_themes": [],
     }

@@ -119,7 +119,7 @@ async def strategist_node(
     )
 
     # Generate strategic feedback using LLM
-    llm = get_llm(temperature=0.5)
+    llm = get_llm(temperature=0.5, run_id=state["run_id"])
     messages = [
         SystemMessage(
             content=STRATEGIST_PROMPT.format(

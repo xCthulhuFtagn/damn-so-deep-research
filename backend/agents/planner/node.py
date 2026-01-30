@@ -88,7 +88,7 @@ async def planner_node(
     """
     logger.info(f"Planner node starting for run {state['run_id']}")
 
-    llm = get_llm(temperature=0.0)
+    llm = get_llm(temperature=0.0, run_id=state["run_id"])
 
     # Check if there's user feedback from a previous rejection
     user_feedback = state.get("user_response")
