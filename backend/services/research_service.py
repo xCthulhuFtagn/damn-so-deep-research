@@ -26,7 +26,6 @@ class ResearchService:
     """
 
     def __init__(self):
-        self._running_tasks: Dict[str, asyncio.Task] = {}
         self._pause_flags: Set[str] = set()
         self._approval_events: Dict[str, asyncio.Event] = {}
         self._approval_results: Dict[str, bool] = {}
@@ -73,10 +72,17 @@ class ResearchService:
         except Exception as e:
             logger.warning(f"Failed to track tokens for run {run_id}: {e}")
 
-    def is_running(self, run_id: str) -> bool:
-        """Check if a run is currently executing."""
-        task = self._running_tasks.get(run_id)
-        return task is not None and not task.done()
+    async def is_running(self, run_id: str) -> bool:
+        """
+        Check if a run is currently executing.
+
+        Uses database status as the single source of truth.
+        """
+        db = await get_db_service()
+        run = await db.get_run(run_id)
+        if not run:
+            return False
+        return run.status == "active"
 
     async def execute_research(
         self,
@@ -168,8 +174,7 @@ class ResearchService:
             await notification.notify_run_error(run_id, str(e))
 
         finally:
-            # Clean up
-            self._running_tasks.pop(run_id, None)
+            # Clean up token tracking
             llm_provider.clear_token_callback()
 
     async def _process_graph_event(
@@ -379,6 +384,86 @@ class ResearchService:
 
         except Exception as e:
             logger.exception(f"Resume error for run {run_id}: {e}")
+            await db.update_run(run_id, status="failed")
+            await notification.notify_run_error(run_id, str(e))
+
+        finally:
+            llm_provider.clear_token_callback()
+
+    async def resume_interrupted(self, run_id: str) -> None:
+        """
+        Resume an interrupted research run from its last checkpoint.
+
+        This is used when a run was interrupted by server crash/restart.
+        It continues execution from where it left off without modifying state.
+        """
+        logger.info(f"Resuming interrupted run {run_id}")
+
+        notification = get_notification_service()
+        db = await get_db_service()
+
+        # Setup token tracking
+        llm_provider = get_llm_provider()
+        llm_provider.set_token_callback(run_id, self._on_tokens)
+
+        # Load existing token count from database
+        run = await db.get_run(run_id)
+        if not run:
+            logger.error(f"Run not found: {run_id}")
+            return
+
+        self._run_tokens[run_id] = run.total_tokens
+
+        try:
+            graph = await self._get_graph()
+            config = get_thread_config(run_id, run.user_id)
+
+            # Check if there's a valid checkpoint to resume from
+            current_state = await graph.aget_state(config)
+            if not current_state or not current_state.values:
+                logger.error(f"No checkpoint found for interrupted run {run_id}")
+                await notification.notify_run_error(run_id, "No checkpoint found to resume from")
+                return
+
+            # Update run status to active
+            await db.update_run(run_id, status="active")
+
+            # Notify that we're resuming
+            await notification.notify_phase_change(
+                run_id,
+                current_state.values.get("phase", "executing"),
+                current_state.values.get("current_step_index"),
+            )
+
+            # Resume execution from checkpoint (None means continue from last state)
+            async for namespace, event in graph.astream(None, config, stream_mode="updates", subgraphs=True):
+                if run_id in self._pause_flags:
+                    await notification.notify_run_paused(run_id)
+                    self._pause_flags.discard(run_id)
+                    await db.update_run(run_id, status="paused")
+                    return
+
+                await self._process_graph_event(run_id, event)
+
+            # Check final state
+            final_state = await graph.aget_state(config)
+            if final_state and final_state.next:
+                phase = final_state.values.get("phase", "")
+                if phase == "awaiting_confirmation":
+                    plan = final_state.values.get("plan", [])
+                    plan_dicts = [dict(step) for step in plan]
+                    await notification.notify_plan_confirmation_needed(run_id, plan_dicts)
+                    await db.update_run(run_id, status="awaiting_confirmation")
+                elif phase == "awaiting_terminal":
+                    await db.update_run(run_id, status="awaiting_terminal")
+                return
+
+            await db.update_run(run_id, status="completed")
+            await notification.notify_run_complete(run_id)
+            logger.info(f"Interrupted run {run_id} completed after resume")
+
+        except Exception as e:
+            logger.exception(f"Error resuming interrupted run {run_id}: {e}")
             await db.update_run(run_id, status="failed")
             await notification.notify_run_error(run_id, str(e))
 

@@ -269,6 +269,23 @@ class DatabaseService:
             )
             await conn.commit()
 
+    async def mark_active_runs_as_interrupted(self) -> int:
+        """
+        Mark all active runs as interrupted.
+
+        Called on server startup to handle runs that were interrupted by a crash.
+        Returns the number of runs marked as interrupted.
+        """
+        async with self.get_connection() as conn:
+            cursor = await conn.execute(
+                "UPDATE runs SET status = 'interrupted' WHERE status = 'active'"
+            )
+            await conn.commit()
+            count = cursor.rowcount
+            if count > 0:
+                logger.info(f"Marked {count} active runs as interrupted due to server restart")
+            return count
+
     # --- Approval Operations ---
 
     async def create_approval(

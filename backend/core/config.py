@@ -178,6 +178,7 @@ class Settings(BaseSettings):
     app_name: str = Field(default="Damn So Deep Research", alias="APP_NAME")
     debug: bool = Field(default=False, alias="DEBUG")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+    log_file: Optional[str] = Field(default="logs/app.log", alias="LOG_FILE")
 
     # Nested settings
     llm: LLMSettings = Field(default_factory=LLMSettings)

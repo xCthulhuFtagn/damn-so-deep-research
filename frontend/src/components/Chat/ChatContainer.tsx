@@ -1,15 +1,17 @@
 import { useState, useRef, useEffect } from 'react';
-import { Message } from '../../types';
+import { Message, Run } from '../../types';
 import MessageList from './MessageList';
 import MessageInput from './MessageInput';
-import { Loader2, Pause, AlertCircle, Search } from 'lucide-react';
+import { Loader2, Pause, AlertCircle, Search, PlayCircle } from 'lucide-react';
 
 interface ChatContainerProps {
   messages: Message[];
   isRunning: boolean;
   phase: string;
+  currentRun: Run | null;
   onSendMessage: (message: string) => void;
   onPause: () => void;
+  onResume: () => void;
   searchThemes: string[];
   error: string | null;
   onClearError: () => void;
@@ -19,12 +21,15 @@ export default function ChatContainer({
   messages,
   isRunning,
   phase,
+  currentRun,
   onSendMessage,
   onPause,
+  onResume,
   searchThemes,
   error,
   onClearError,
 }: ChatContainerProps) {
+  const isInterrupted = currentRun?.status === 'interrupted';
   const [inputValue, setInputValue] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -79,6 +84,44 @@ export default function ChatContainer({
             className="text-red-500 dark:text-red-400 hover:text-red-700 dark:hover:text-red-200"
           >
             &times;
+          </button>
+        </div>
+      )}
+
+      {/* Interrupted Banner */}
+      {isInterrupted && (
+        <div className="px-6 py-3 bg-amber-50 dark:bg-amber-900/20 border-b border-amber-200 dark:border-amber-800 flex items-center justify-between">
+          <div className="flex items-center gap-2 text-amber-700 dark:text-amber-300">
+            <AlertCircle className="w-4 h-4" />
+            <span className="text-sm">
+              Research was interrupted (server restart). Resume to continue from where it left off.
+            </span>
+          </div>
+          <button
+            onClick={onResume}
+            className="flex items-center gap-2 px-4 py-1.5 text-sm bg-amber-600 text-white rounded-md hover:bg-amber-700"
+          >
+            <PlayCircle className="w-4 h-4" />
+            Resume
+          </button>
+        </div>
+      )}
+
+      {/* Paused Banner */}
+      {currentRun?.status === 'paused' && (
+        <div className="px-6 py-3 bg-yellow-50 dark:bg-yellow-900/20 border-b border-yellow-200 dark:border-yellow-800 flex items-center justify-between">
+          <div className="flex items-center gap-2 text-yellow-700 dark:text-yellow-300">
+            <Pause className="w-4 h-4" />
+            <span className="text-sm">
+              Research paused. Send a message to resume or click Resume to continue.
+            </span>
+          </div>
+          <button
+            onClick={onResume}
+            className="flex items-center gap-2 px-4 py-1.5 text-sm bg-yellow-600 text-white rounded-md hover:bg-yellow-700"
+          >
+            <PlayCircle className="w-4 h-4" />
+            Resume
           </button>
         </div>
       )}

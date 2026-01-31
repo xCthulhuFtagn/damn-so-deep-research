@@ -100,6 +100,11 @@ export const researchApi = {
     return response.data;
   },
 
+  resume: async (runId: string) => {
+    const response = await apiClient.post('/research/resume', { run_id: runId });
+    return response.data;
+  },
+
   sendMessage: async (runId: string, message: string) => {
     const response = await apiClient.post('/research/message', { run_id: runId, message });
     return response.data;

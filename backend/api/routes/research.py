@@ -143,6 +143,76 @@ async def pause_research(
     return {"status": "pausing", "run_id": request.run_id}
 
 
+class ResumeRequest(BaseModel):
+    """Request to resume an interrupted run."""
+
+    run_id: str
+
+
+@router.post("/resume")
+async def resume_interrupted(
+    request: ResumeRequest,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    db: DatabaseService = Depends(get_db_service),
+):
+    """
+    Resume an interrupted research run.
+
+    Used when a run was interrupted by server crash/restart.
+    Continues execution from the last checkpoint.
+    """
+    run = await db.get_run(request.run_id)
+    if not run:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Run not found",
+        )
+
+    if run.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized",
+        )
+
+    if run.status not in ("interrupted", "paused"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Run cannot be resumed (status: {run.status})",
+        )
+
+    from backend.services.research_service import get_research_service
+
+    service = await get_research_service()
+
+    # Check if already running (use DB status as source of truth)
+    if run.status == "active":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Run is already executing",
+        )
+
+    logger.info(f"Resuming interrupted run {request.run_id}")
+
+    background_tasks.add_task(
+        service.resume_interrupted,
+        run_id=request.run_id,
+    )
+
+    # Broadcast start event
+    manager = get_connection_manager()
+    await manager.broadcast(
+        request.run_id,
+        create_ws_event(WSEventType.RUN_START, run_id=request.run_id),
+    )
+
+    return {
+        "status": "resuming",
+        "run_id": request.run_id,
+        "message": "Resuming interrupted research from last checkpoint",
+    }
+
+
 @router.post("/message")
 async def send_message(
     request: StartResearchRequest,
@@ -273,5 +343,5 @@ async def get_research_state(
         plan=state.get("plan", []),
         current_step_index=state.get("current_step_index", 0),
         messages=messages,
-        is_running=service.is_running(run_id),
+        is_running=run.status == "active",  # Use DB status as source of truth
     )

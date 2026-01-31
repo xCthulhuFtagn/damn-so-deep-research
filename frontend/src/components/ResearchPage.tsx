@@ -182,8 +182,10 @@ export default function ResearchPage() {
             messages={research.messages}
             isRunning={research.isRunning}
             phase={research.phase}
+            currentRun={research.currentRun}
             onSendMessage={research.sendMessage}
             onPause={research.pauseResearch}
+            onResume={research.resumeResearch}
             searchThemes={research.searchThemes}
             error={research.error}
             onClearError={research.clearError}

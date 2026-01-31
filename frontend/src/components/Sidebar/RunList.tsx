@@ -23,6 +23,8 @@ function getStatusColor(status: Run['status']): string {
       return 'bg-green-500';
     case 'paused':
       return 'bg-yellow-500';
+    case 'interrupted':
+      return 'bg-amber-500';
     case 'completed':
       return 'bg-blue-500';
     case 'failed':

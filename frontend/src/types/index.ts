@@ -15,7 +15,7 @@ export interface AuthResponse {
 export interface Run {
   id: string;
   title: string;
-  status: 'active' | 'paused' | 'completed' | 'failed' | 'awaiting_confirmation';
+  status: 'active' | 'paused' | 'completed' | 'failed' | 'awaiting_confirmation' | 'interrupted';
   created_at: string;
   total_tokens: number;
 }
@@ -177,6 +177,7 @@ export interface StateSyncEvent extends WSEvent {
   type: 'state_sync';
   run_id: string;
   is_running: boolean;
+  run_status: Run['status'];
   phase: string;
   plan: PlanStep[];
   current_step_index: number;

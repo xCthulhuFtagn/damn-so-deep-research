@@ -70,9 +70,13 @@ services:
     command: >
       --model ${OPENAI_MODEL:-openai/gpt-oss-20b}
       --dtype auto
-      --max-model-len 32768
-      --gpu-memory-utilization 0.9
+      --max-model-len 70000
+      --gpu-memory-utilization 0.95
       --enforce-eager
+      --kv-cache-dtype fp8_e5m2
+      --enable-prefix-caching
+      --enable-chunked-prefill
+      --max-num-seqs 4
       --enable-auto-tool-choice
       --tool-call-parser openai
     ports:

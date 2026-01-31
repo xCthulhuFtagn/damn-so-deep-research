@@ -12,7 +12,7 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 from backend.agents.state import ResearchState
-from backend.core.llm import get_llm
+from backend.core.llm import get_llm, invoke_structured_output
 
 logger = logging.getLogger(__name__)
 
@@ -142,10 +142,9 @@ async def sufficiency_check_node(state: ResearchState) -> dict:
         remaining_calls=remaining_calls,
     )
 
-    # Call LLM with structured output
+    # Call LLM with structured output (with fallback for models that don't support it)
     llm = get_llm(temperature=0.1, run_id=run_id)
-    structured_llm = llm.with_structured_output(SufficiencyDecision)
-    result: SufficiencyDecision = await structured_llm.ainvoke(prompt)
+    result = await invoke_structured_output(llm, SufficiencyDecision, prompt)
 
     is_sufficient = result.decision == "SUFFICIENT"
 

@@ -43,7 +43,7 @@ class Run(BaseModel):
     id: str
     user_id: str
     title: str
-    status: Literal["active", "paused", "completed", "failed", "awaiting_confirmation"] = "active"
+    status: Literal["active", "paused", "completed", "failed", "awaiting_confirmation", "interrupted"] = "active"
     created_at: datetime
     total_tokens: int = 0
 
@@ -55,7 +55,7 @@ class RunUpdate(BaseModel):
     """Request model for updating a run."""
 
     title: Optional[str] = None
-    status: Optional[Literal["active", "paused", "completed", "failed", "awaiting_confirmation"]] = None
+    status: Optional[Literal["active", "paused", "completed", "failed", "awaiting_confirmation", "interrupted"]] = None
 
 
 # --- Approval Models ---

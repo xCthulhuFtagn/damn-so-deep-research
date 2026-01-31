@@ -5,21 +5,22 @@ Provides a configured ChatOpenAI instance for use in LangGraph nodes.
 Includes token tracking with async callback support.
 """
 
-import asyncio
+import json
 import logging
-from typing import Any, Callable, Coroutine, Optional
+from typing import Any, Callable, Coroutine, Optional, Type, TypeVar
 
-from langchain_core.callbacks import BaseCallbackHandler
+from langchain_core.callbacks import AsyncCallbackHandler
 from langchain_openai import ChatOpenAI
+from pydantic import BaseModel
 
 from backend.core.config import config
 
 logger = logging.getLogger(__name__)
 
 
-class TokenTrackingCallback(BaseCallbackHandler):
+class TokenTrackingCallback(AsyncCallbackHandler):
     """
-    Callback handler that tracks token usage from LLM responses.
+    Async callback handler that tracks token usage from LLM responses.
 
     Calls an async callback with (run_id, input_tokens, output_tokens) on each LLM response.
     """
@@ -35,7 +36,7 @@ class TokenTrackingCallback(BaseCallbackHandler):
         self.total_input_tokens = 0
         self.total_output_tokens = 0
 
-    def on_llm_end(self, response: Any, **kwargs: Any) -> None:
+    async def on_llm_end(self, response: Any, **kwargs: Any) -> None:
         """Called when LLM finishes. Extract token usage from response."""
         try:
             input_tokens = 0
@@ -46,6 +47,8 @@ class TokenTrackingCallback(BaseCallbackHandler):
             # Method 1: Try llm_output.token_usage (OpenAI standard)
             if hasattr(response, "llm_output") and response.llm_output:
                 token_usage = response.llm_output.get("token_usage", {})
+                if token_usage:
+                    logger.debug(f"Found token_usage in llm_output: {token_usage}")
                 input_tokens = token_usage.get("prompt_tokens", 0)
                 output_tokens = token_usage.get("completion_tokens", 0)
 
@@ -83,18 +86,11 @@ class TokenTrackingCallback(BaseCallbackHandler):
 
             total = input_tokens + output_tokens
             if total > 0 and self.on_tokens:
-                # Schedule async callback
-                try:
-                    loop = asyncio.get_running_loop()
-                    loop.create_task(self.on_tokens(self.run_id, input_tokens, output_tokens))
-                except RuntimeError:
-                    # No running loop - ignore (sync context)
-                    pass
-
-            if total > 0:
-                logger.debug(f"Token usage for run {self.run_id}: +{input_tokens} in, +{output_tokens} out")
-            else:
-                logger.debug(f"No token usage info available for run {self.run_id} (LLM may not report tokens)")
+                # Directly await the async callback
+                await self.on_tokens(self.run_id, input_tokens, output_tokens)
+                logger.info(f"Token usage for run {self.run_id}: +{input_tokens} in, +{output_tokens} out (total: {total})")
+            elif total == 0:
+                logger.warning(f"No token usage info available for run {self.run_id} (LLM may not report tokens)")
         except Exception as e:
             logger.warning(f"Failed to extract token usage: {e}")
 
@@ -303,3 +299,63 @@ async def track_response_tokens(run_id: str, response: Any) -> int:
         logger.debug(f"No token info in response for run {run_id}")
 
     return total
+
+
+T = TypeVar("T", bound=BaseModel)
+
+
+async def invoke_structured_output(
+    llm: ChatOpenAI,
+    schema: Type[T],
+    prompt: str,
+) -> T:
+    """
+    Invoke LLM with structured output, falling back to JSON parsing if needed.
+
+    Some models (especially open-source ones via OpenAI-compatible APIs) don't
+    properly support structured output. This function tries structured output
+    first, then falls back to parsing JSON from the raw content.
+
+    Args:
+        llm: ChatOpenAI instance
+        schema: Pydantic model class for the expected output
+        prompt: The prompt to send to the LLM
+
+    Returns:
+        Parsed instance of the schema
+
+    Raises:
+        ValueError: If structured output fails and fallback parsing also fails
+    """
+    # Try structured output with include_raw=True to access raw response on failure
+    structured_llm = llm.with_structured_output(schema, include_raw=True)
+    result = await structured_llm.ainvoke(prompt)
+
+    # If parsed successfully, return it
+    if result.get("parsed"):
+        return result["parsed"]
+
+    # Fallback: try to parse from raw response content
+    raw = result.get("raw")
+    if raw and hasattr(raw, "content") and raw.content:
+        content = raw.content
+        logger.debug(f"Structured output empty, trying to parse JSON from content: {content[:200]}...")
+        try:
+            # Try to extract JSON from content (might be wrapped in markdown code blocks)
+            json_str = content
+            if "```json" in content:
+                json_str = content.split("```json")[1].split("```")[0].strip()
+            elif "```" in content:
+                json_str = content.split("```")[1].split("```")[0].strip()
+
+            data = json.loads(json_str)
+            return schema.model_validate(data)
+        except (json.JSONDecodeError, IndexError) as e:
+            logger.warning(f"Failed to parse JSON from content: {e}")
+        except Exception as e:
+            logger.warning(f"Failed to validate parsed JSON: {e}")
+
+    raise ValueError(
+        f"Could not get structured output from LLM. "
+        f"Raw response content: {raw.content if raw and hasattr(raw, 'content') else raw}"
+    )

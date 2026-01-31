@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { Message, PlanStep, Run, Approval, WSEvent } from '../types';
+import type { Message, PlanStep, Run, Approval, WSEvent } from '../types';
 import { runsApi, researchApi, approvalsApi } from '../api/client';
 
 interface ResearchState {
@@ -35,6 +35,7 @@ interface ResearchState {
   // Actions - Research
   startResearch: (message?: string) => Promise<void>;
   pauseResearch: () => Promise<void>;
+  resumeResearch: () => Promise<void>;
   sendMessage: (message: string) => Promise<void>;
   fetchState: () => Promise<void>;
 
@@ -176,6 +177,22 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
       set({ isRunning: false, phase: 'paused' });
     } catch (error) {
       set({ error: 'Failed to pause research' });
+    }
+  },
+
+  resumeResearch: async () => {
+    const { currentRun } = get();
+    if (!currentRun) return;
+
+    set({ isLoading: true, isRunning: true });
+    try {
+      await researchApi.resume(currentRun.id);
+      set((state) => ({
+        isLoading: false,
+        currentRun: state.currentRun ? { ...state.currentRun, status: 'active' } : null,
+      }));
+    } catch (error) {
+      set({ error: 'Failed to resume research', isLoading: false, isRunning: false });
     }
   },
 
@@ -348,8 +365,9 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
         {
           const phase = event.phase as string;
           const messages = event.messages as Message[] || [];
+          const runStatus = event.run_status as Run['status'] | undefined;
 
-          set({
+          set((state) => ({
             isRunning: event.is_running as boolean,
             phase: phase,
             plan: event.plan as PlanStep[],
@@ -358,7 +376,15 @@ export const useResearchStore = create<ResearchState>((set, get) => ({
             messages: messages,
             // Show plan confirmation modal if in awaiting_confirmation phase
             showPlanConfirmationModal: phase === 'awaiting_confirmation',
-          });
+            // Update current run status if we have it
+            currentRun: state.currentRun && runStatus
+              ? { ...state.currentRun, status: runStatus }
+              : state.currentRun,
+            // Also update in runs list
+            runs: runStatus && state.currentRun
+              ? state.runs.map(r => r.id === state.currentRun?.id ? { ...r, status: runStatus } : r)
+              : state.runs,
+          }));
         }
         break;
 

@@ -10,7 +10,7 @@ from typing import Annotated, Literal, Optional, Union
 from pydantic import BaseModel, Field
 
 from backend.agents.state import ExecutorDecision, ResearchState
-from backend.core.llm import get_llm
+from backend.core.llm import get_llm, invoke_structured_output
 
 logger = logging.getLogger(__name__)
 
@@ -182,10 +182,9 @@ async def decision_node(state: ResearchState) -> dict:
         remaining_calls=remaining_calls,
     )
 
-    # Call LLM with structured output
+    # Call LLM with structured output (with fallback for models that don't support it)
     llm = get_llm(temperature=0.3, run_id=run_id)
-    structured_llm = llm.with_structured_output(ToolDecision)
-    result: ToolDecision = await structured_llm.ainvoke(prompt)
+    result = await invoke_structured_output(llm, ToolDecision, prompt)
 
     # Convert to ExecutorDecision format
     tool_choice = result.params.tool

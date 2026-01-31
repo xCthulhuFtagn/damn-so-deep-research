@@ -39,6 +39,7 @@ export function useResearch(runId: string | null) {
     // Actions
     startResearch: store.startResearch,
     pauseResearch: store.pauseResearch,
+    resumeResearch: store.resumeResearch,
     sendMessage: store.sendMessage,
     respondToApproval: store.respondToApproval,
     clearError: store.clearError,

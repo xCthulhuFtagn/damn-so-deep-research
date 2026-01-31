@@ -15,12 +15,13 @@ from backend.api.routes import api_router
 from backend.api.websocket import get_connection_manager
 from backend.core.config import config
 from backend.core.checkpointer import get_checkpointer, close_checkpointer
+from backend.core.logging import setup_logging
 from backend.persistence.database import get_db_service
 
-# Configure logging
-logging.basicConfig(
-    level=getattr(logging, config.log_level),
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+# Configure logging (console + file)
+setup_logging(
+    level=config.log_level,
+    log_file=config.log_file,
 )
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,11 @@ async def lifespan(app: FastAPI):
     # Initialize database
     db = await get_db_service()
     logger.info("Database initialized")
+
+    # Mark any active runs as interrupted (they were running when server crashed)
+    interrupted_count = await db.mark_active_runs_as_interrupted()
+    if interrupted_count > 0:
+        logger.warning(f"Found {interrupted_count} runs that were interrupted by server restart")
 
     # Initialize checkpointer
     checkpointer = await get_checkpointer()
@@ -115,7 +121,12 @@ async def websocket_endpoint(websocket: WebSocket, run_id: str):
         try:
             service = await get_research_service()
             state = await service.get_state(run_id)
-            is_running = service.is_running(run_id)
+
+            # Get run from database - single source of truth for status
+            db = websocket.app.state.db
+            run = await db.get_run(run_id)
+            run_status = run.status if run else "unknown"
+            is_running = run_status == "active"
 
             # Convert messages to dicts
             messages = []
@@ -135,6 +146,7 @@ async def websocket_endpoint(websocket: WebSocket, run_id: str):
                 "type": "state_sync",
                 "run_id": run_id,
                 "is_running": is_running,
+                "run_status": run_status,
                 "phase": phase,
                 "plan": state.get("plan", []) if state else [],
                 "current_step_index": state.get("current_step_index", 0) if state else 0,
@@ -160,7 +172,12 @@ async def websocket_endpoint(websocket: WebSocket, run_id: str):
                     try:
                         service = await get_research_service()
                         state = await service.get_state(run_id)
-                        is_running = service.is_running(run_id)
+
+                        # Get run from database - single source of truth for status
+                        db = websocket.app.state.db
+                        run = await db.get_run(run_id)
+                        run_status = run.status if run else "unknown"
+                        is_running = run_status == "active"
 
                         # Convert messages to dicts
                         messages = []
@@ -180,6 +197,7 @@ async def websocket_endpoint(websocket: WebSocket, run_id: str):
                             "type": "state_sync",
                             "run_id": run_id,
                             "is_running": is_running,
+                            "run_status": run_status,
                             "phase": phase,
                             "plan": state.get("plan", []) if state else [],
                             "current_step_index": state.get("current_step_index", 0) if state else 0,
@@ -190,7 +208,9 @@ async def websocket_endpoint(websocket: WebSocket, run_id: str):
                     except Exception as e:
                         logger.warning(f"Failed to send state for run {run_id}: {e}")
 
-            except WebSocketDisconnect:
+            except (WebSocketDisconnect, RuntimeError):
+                # WebSocketDisconnect: client disconnected normally
+                # RuntimeError: websocket closed unexpectedly
                 break
 
     finally:
