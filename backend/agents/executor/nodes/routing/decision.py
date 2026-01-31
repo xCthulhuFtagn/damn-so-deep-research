@@ -183,7 +183,7 @@ async def decision_node(state: ResearchState) -> dict:
     )
 
     # Call LLM with structured output (with fallback for models that don't support it)
-    llm = get_llm(temperature=0.3, run_id=run_id)
+    llm = get_llm(temperature=0, run_id=run_id)
     result = await invoke_structured_output(llm, ToolDecision, prompt)
 
     # Convert to ExecutorDecision format

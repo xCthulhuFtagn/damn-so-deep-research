@@ -175,7 +175,7 @@ async def resume_interrupted(
             detail="Not authorized",
         )
 
-    if run.status not in ("interrupted", "paused"):
+    if run.status not in ("interrupted", "paused", "failed"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Run cannot be resumed (status: {run.status})",

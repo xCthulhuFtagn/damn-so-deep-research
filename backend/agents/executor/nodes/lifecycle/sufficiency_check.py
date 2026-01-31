@@ -143,7 +143,7 @@ async def sufficiency_check_node(state: ResearchState) -> dict:
     )
 
     # Call LLM with structured output (with fallback for models that don't support it)
-    llm = get_llm(temperature=0.1, run_id=run_id)
+    llm = get_llm(temperature=0, run_id=run_id)
     result = await invoke_structured_output(llm, SufficiencyDecision, prompt)
 
     is_sufficient = result.decision == "SUFFICIENT"

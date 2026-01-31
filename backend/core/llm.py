@@ -208,7 +208,11 @@ def get_llm_provider() -> LLMProvider:
     return _provider
 
 
-def get_llm(temperature: float = 0.0, run_id: Optional[str] = None) -> ChatOpenAI:
+def get_llm(
+    temperature: float = 0.0,
+    max_tokens: Optional[int] = None,
+    run_id: Optional[str] = None,
+) -> ChatOpenAI:
     """
     Get a ChatOpenAI instance.
 
@@ -216,12 +220,13 @@ def get_llm(temperature: float = 0.0, run_id: Optional[str] = None) -> ChatOpenA
 
     Args:
         temperature: Sampling temperature (0.0 = deterministic)
+        max_tokens: Maximum tokens to generate (None = model default)
         run_id: Optional run ID for token tracking
 
     Returns:
         Configured ChatOpenAI instance
     """
-    return get_llm_provider().get_llm(temperature=temperature, run_id=run_id)
+    return get_llm_provider().get_llm(temperature=temperature, max_tokens=max_tokens, run_id=run_id)
 
 
 def get_creative_llm(run_id: Optional[str] = None) -> ChatOpenAI:
@@ -304,6 +309,33 @@ async def track_response_tokens(run_id: str, response: Any) -> int:
 T = TypeVar("T", bound=BaseModel)
 
 
+def _build_json_schema_prompt(schema: Type[T], prompt: str) -> str:
+    """Build a prompt that asks for JSON output matching the schema."""
+    schema_json = json.dumps(schema.model_json_schema(), indent=2)
+    return f"""{prompt}
+
+You MUST respond with valid JSON matching this schema:
+{schema_json}
+
+Respond ONLY with the JSON object, no other text or markdown."""
+
+
+def _parse_json_content(content: str, schema: Type[T]) -> T:
+    """Parse JSON from content, handling markdown code blocks."""
+    json_str = content.strip()
+
+    # Remove markdown code blocks if present
+    if "```json" in json_str:
+        json_str = json_str.split("```json")[1].split("```")[0].strip()
+    elif "```" in json_str:
+        parts = json_str.split("```")
+        if len(parts) >= 2:
+            json_str = parts[1].strip()
+
+    data = json.loads(json_str)
+    return schema.model_validate(data)
+
+
 async def invoke_structured_output(
     llm: ChatOpenAI,
     schema: Type[T],
@@ -314,7 +346,7 @@ async def invoke_structured_output(
 
     Some models (especially open-source ones via OpenAI-compatible APIs) don't
     properly support structured output. This function tries structured output
-    first, then falls back to parsing JSON from the raw content.
+    first, then falls back to a direct call asking for JSON.
 
     Args:
         llm: ChatOpenAI instance
@@ -331,31 +363,52 @@ async def invoke_structured_output(
     structured_llm = llm.with_structured_output(schema, include_raw=True)
     result = await structured_llm.ainvoke(prompt)
 
+    logger.debug(f"Structured output result keys: {result.keys() if result else 'None'}")
+
     # If parsed successfully, return it
     if result.get("parsed"):
         return result["parsed"]
 
     # Fallback: try to parse from raw response content
     raw = result.get("raw")
-    if raw and hasattr(raw, "content") and raw.content:
-        content = raw.content
-        logger.debug(f"Structured output empty, trying to parse JSON from content: {content[:200]}...")
-        try:
-            # Try to extract JSON from content (might be wrapped in markdown code blocks)
-            json_str = content
-            if "```json" in content:
-                json_str = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content:
-                json_str = content.split("```")[1].split("```")[0].strip()
+    parsing_error = result.get("parsing_error")
 
-            data = json.loads(json_str)
-            return schema.model_validate(data)
-        except (json.JSONDecodeError, IndexError) as e:
-            logger.warning(f"Failed to parse JSON from content: {e}")
+    if parsing_error:
+        logger.debug(f"Structured output parsing error: {parsing_error}")
+
+    # Try to extract from tool_calls (some models return structured output this way)
+    if raw and hasattr(raw, "tool_calls") and raw.tool_calls:
+        try:
+            tool_call = raw.tool_calls[0]
+            args = tool_call.get("args", {}) if isinstance(tool_call, dict) else getattr(tool_call, "args", {})
+            if args:
+                logger.debug(f"Extracted args from tool_calls: {args}")
+                return schema.model_validate(args)
         except Exception as e:
-            logger.warning(f"Failed to validate parsed JSON: {e}")
+            logger.warning(f"Failed to parse from tool_calls: {e}")
+
+    # Try to parse from content
+    if raw and hasattr(raw, "content") and raw.content:
+        try:
+            return _parse_json_content(raw.content, schema)
+        except (json.JSONDecodeError, IndexError, Exception) as e:
+            logger.warning(f"Failed to parse JSON from content: {e}")
+
+    # Fallback: make a direct call asking for JSON
+    logger.info("Structured output parsing failed, retrying with explicit JSON prompt")
+    json_prompt = _build_json_schema_prompt(schema, prompt)
+    response = await llm.ainvoke(json_prompt)
+
+    if response.content:
+        try:
+            return _parse_json_content(response.content, schema)
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON parse error: {e}, content: {response.content[:500]}")
+            raise ValueError(f"Could not parse JSON from LLM response: {e}")
+        except Exception as e:
+            logger.error(f"Validation error: {e}")
+            raise ValueError(f"Could not validate JSON response: {e}")
 
     raise ValueError(
-        f"Could not get structured output from LLM. "
-        f"Raw response content: {raw.content if raw and hasattr(raw, 'content') else raw}"
+        f"Could not get structured output from LLM. Model returned empty response."
     )

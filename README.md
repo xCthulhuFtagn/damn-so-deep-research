@@ -7,7 +7,7 @@ A **FastAPI + React** application for deep automated research powered by **LangG
 - **LangGraph Multi-Agent Architecture**: Specialized agents (Planner, Executor Subgraph, Evaluator, Strategist, Reporter) work together using a StateGraph
 - **Flexible Executor Subgraph**: Multi-tool executor supporting web search, terminal commands, file reading, and LLM knowledge with iterative loop and LLM-based sufficiency checking
 - **Parallel Search**: Execute multiple web searches simultaneously using LangGraph's Send API (fan-out/fan-in by themes)
-- **Checkpoint Persistence**: Built-in pause/resume with AsyncSqliteSaver — stop research and continue later
+- **Checkpoint Persistence**: Built-in pause/resume with AsyncSqliteSaver — stop research and continue later (supports resuming failed runs)
 - **Human-in-the-Loop**: Command approval system with interrupt_before/after for secure terminal execution
 - **Real-time Updates**: WebSocket streaming for live progress in the React UI
 - **Multi-user Support**: JWT authentication with isolated research sessions per user
@@ -446,7 +446,7 @@ High-level business logic and orchestration.
 - **`notification_service.py`**: Centralized hub for broadcasting events (phase changes, new messages, logs) to the frontend via WebSockets.
 
 #### 🏗️ Core & Infrastructure
-- **`core/`**: Global configuration (`config.py`), LLM provider setup (`llm.py`), and persistence checkpointers (`checkpointer.py`).
+- **`core/`**: Global configuration (`config.py`), LLM provider setup (`llm.py`) with structured output fallback for non-OpenAI models, and persistence checkpointers (`checkpointer.py`).
 - **`persistence/`**: Database schema (`models.py`) and connection management (`database.py`) using SQLAlchemy and SQLite.
 - **`ml/`**: Advanced text processing utilities (`text_processing.py`), including bi-encoder/cross-encoder models for result re-ranking.
 
@@ -490,6 +490,7 @@ A modern React application built with TypeScript, Vite, and Tailwind CSS.
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/research/start` | POST | Start/resume research |
+| `/research/resume/{run_id}` | POST | Resume interrupted, paused, or failed run |
 | `/research/pause` | POST | Pause research |
 | `/research/message` | POST | Send user message |
 | `/research/state` | GET | Get current state |
@@ -521,7 +522,7 @@ Connect to `/ws/{run_id}` for real-time updates:
 |----------|---------|-------------|
 | `LLM_BASE_URL` | - | OpenAI-compatible API endpoint |
 | `LLM_API_KEY` | - | API key for LLM |
-| `LLM_MODEL` | `gpt-4` | Model to use |
+| `LLM_MODEL` | `gpt-4` | Model to use (supports OpenAI-compatible APIs with structured output fallback) |
 | `JWT_SECRET_KEY` | - | Secret for JWT signing |
 | `DATABASE_PATH` | `db/app.db` | SQLite database path |
 | `LANGGRAPH_CHECKPOINT_PATH` | `db/langgraph.db` | LangGraph checkpoints |

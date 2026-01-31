@@ -30,6 +30,7 @@ export default function ChatContainer({
   onClearError,
 }: ChatContainerProps) {
   const isInterrupted = currentRun?.status === 'interrupted';
+  const isFailed = currentRun?.status === 'failed';
   const [inputValue, setInputValue] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -119,6 +120,25 @@ export default function ChatContainer({
           <button
             onClick={onResume}
             className="flex items-center gap-2 px-4 py-1.5 text-sm bg-yellow-600 text-white rounded-md hover:bg-yellow-700"
+          >
+            <PlayCircle className="w-4 h-4" />
+            Resume
+          </button>
+        </div>
+      )}
+
+      {/* Failed Banner */}
+      {isFailed && (
+        <div className="px-6 py-3 bg-red-50 dark:bg-red-900/20 border-b border-red-200 dark:border-red-800 flex items-center justify-between">
+          <div className="flex items-center gap-2 text-red-700 dark:text-red-300">
+            <AlertCircle className="w-4 h-4" />
+            <span className="text-sm">
+              Research failed. You can try to resume from the last checkpoint.
+            </span>
+          </div>
+          <button
+            onClick={onResume}
+            className="flex items-center gap-2 px-4 py-1.5 text-sm bg-red-600 text-white rounded-md hover:bg-red-700"
           >
             <PlayCircle className="w-4 h-4" />
             Resume
