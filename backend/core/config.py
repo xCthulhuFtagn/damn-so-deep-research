@@ -52,6 +52,19 @@ class LLMSettings(BaseSettings):
         return v
 
 
+def _detect_device() -> str:
+    """Auto-detect best available device."""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return "cuda"
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return "mps"
+    except ImportError:
+        pass
+    return "cpu"
+
+
 class MLSettings(BaseSettings):
     """Machine learning models configuration."""
 
@@ -65,7 +78,11 @@ class MLSettings(BaseSettings):
         default="cross-encoder/ms-marco-MiniLM-L-6-v2",
         alias="CROSS_ENCODER_MODEL",
     )
-    device: str = Field(default="cpu", alias="ML_DEVICE")
+    device: str = Field(default_factory=_detect_device, alias="ML_DEVICE")
+    use_fp16: bool = Field(default=True, alias="ML_USE_FP16")
+    # Batch settings for async embedding
+    batch_max_wait_ms: int = Field(default=50, ge=10, le=500, alias="ML_BATCH_MAX_WAIT_MS")
+    batch_max_size: int = Field(default=64, ge=1, le=256, alias="ML_BATCH_MAX_SIZE")
 
     @field_validator("device")
     @classmethod

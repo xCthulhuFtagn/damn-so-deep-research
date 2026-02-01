@@ -4,20 +4,24 @@ Intelligent web search tool with ML-based filtering.
 Pipeline:
 1. Firecrawl Search API for web search + scraping
 2. Text chunking
-3. Bi-encoder semantic filtering (top-20 candidates)
-4. Cross-encoder reranking (top-3 final results)
+3. Bi-encoder semantic filtering (top-20 candidates) - async batched
+4. Cross-encoder reranking (top-3 final results) - async batched
 """
 
 import logging
 from typing import Optional
 
 import httpx
+import numpy as np
 import torch
 from sentence_transformers import util
 
 from backend.core.config import config
-from backend.core.exceptions import SearchError
-from backend.ml.text_processing import get_model_manager
+from backend.ml.text_processing import (
+    get_cross_encoder_batcher,
+    get_embedding_batcher,
+    get_model_manager,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -109,17 +113,20 @@ async def intelligent_web_search(
 
     logger.info(f"Extracted {len(all_chunks)} chunks for '{query}'")
 
-    # --- Step 3: Bi-Encoder Filtering ---
-    bi_encoder = model_manager.get_bi_encoder()
+    # --- Step 3: Bi-Encoder Filtering (async batched) ---
+    embedding_batcher = get_embedding_batcher()
     chunk_texts = [c["text"] for c in all_chunks]
 
-    query_embed = bi_encoder.encode(query, convert_to_tensor=True)
-    corpus_embeds = bi_encoder.encode(
-        chunk_texts, convert_to_tensor=True, show_progress_bar=False
-    )
+    # Encode query and chunks via async batcher
+    query_embed = await embedding_batcher.encode([query])
+    corpus_embeds = await embedding_batcher.encode(chunk_texts)
+
+    # Convert to tensors for similarity computation
+    query_tensor = torch.from_numpy(query_embed[0]).unsqueeze(0)
+    corpus_tensor = torch.from_numpy(np.array(corpus_embeds))
 
     top_k = min(20, len(all_chunks))
-    cos_scores = util.cos_sim(query_embed, corpus_embeds)[0]
+    cos_scores = util.cos_sim(query_tensor, corpus_tensor)[0]
     top_results = torch.topk(cos_scores, k=top_k)
 
     candidates = []
@@ -135,10 +142,10 @@ async def intelligent_web_search(
 
     logger.info(f"Bi-encoder selected {len(candidates)} candidates for '{query}'")
 
-    # --- Step 4: Cross-Encoder Reranking ---
-    cross_encoder = model_manager.get_cross_encoder()
+    # --- Step 4: Cross-Encoder Reranking (async batched) ---
+    cross_encoder_batcher = get_cross_encoder_batcher()
     cross_inp = [[query, item["text"]] for item in candidates]
-    cross_scores = cross_encoder.predict(cross_inp)
+    cross_scores = await cross_encoder_batcher.predict(cross_inp)
 
     scored = [
         {"item": item, "score": cross_scores[i]}

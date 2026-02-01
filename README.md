@@ -11,7 +11,7 @@ A **FastAPI + React** application for deep automated research powered by **LangG
 - **Human-in-the-Loop**: Command approval system with interrupt_before/after for secure terminal execution
 - **Real-time Updates**: WebSocket streaming for live progress in the React UI
 - **Multi-user Support**: JWT authentication with isolated research sessions per user
-- **Intelligent Search**: SearXNG integration with bi-encoder and cross-encoder filtering
+- **Intelligent Search**: Firecrawl integration with bi-encoder and cross-encoder filtering (async batched, FP16 GPU support)
 
 ## Requirements
 
@@ -50,15 +50,20 @@ LLM_API_KEY=your-api-key
 LLM_MODEL=gpt-4
 
 # Auth
-JWT_SECRET_KEY=your-secret-key-change-in-production
+AUTH_SECRET_KEY=your-secret-key-change-in-production
 
-# Search (optional)
-SEARXNG_URL=http://localhost:8080
-FIRECRAWL_API_KEY=your-firecrawl-key   # Optional, for enhanced scraping
+# Search
+FIRECRAWL_BASE_URL=http://localhost:3002
+FIRECRAWL_API_KEY=dummy_token
+
+# ML Settings (optional, auto-detects GPU)
+ML_DEVICE=cuda                              # cuda, mps, or cpu (auto-detected)
+ML_USE_FP16=true                            # FP16 inference on GPU
 
 # Database paths (optional, defaults shown)
-DATABASE_PATH=db/app.db
-LANGGRAPH_CHECKPOINT_PATH=db/langgraph.db
+DB_BASE_DIR=db
+DB_APP_DB_NAME=app.db
+DB_LANGGRAPH_DB_NAME=langgraph.db
 ```
 
 ### 4. Start Services
@@ -448,7 +453,7 @@ High-level business logic and orchestration.
 #### 🏗️ Core & Infrastructure
 - **`core/`**: Global configuration (`config.py`), LLM provider setup (`llm.py`) with structured output fallback for non-OpenAI models, and persistence checkpointers (`checkpointer.py`).
 - **`persistence/`**: Database schema (`models.py`) and connection management (`database.py`) using SQLAlchemy and SQLite.
-- **`ml/`**: Advanced text processing utilities (`text_processing.py`), including bi-encoder/cross-encoder models for result re-ranking.
+- **`ml/`**: Advanced text processing utilities (`text_processing.py`), including bi-encoder/cross-encoder models for result re-ranking. Supports **FP16 inference on GPU** and **async batching** for efficient concurrent requests.
 
 ---
 
@@ -537,6 +542,24 @@ Connect to `/ws/{run_id}` for real-time updates:
 | `RESEARCH_MAX_EXECUTOR_CALLS` | `3` | Max tool calls per executor cycle |
 | `RESEARCH_MAX_FILE_READ_CHARS` | `50000` | File read character limit |
 | `RESEARCH_TERMINAL_OUTPUT_LIMIT` | `2000` | Terminal output truncation |
+
+#### ML Settings (Embedding Models)
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ML_DEVICE` | auto-detect | Device for ML models: `cuda`, `mps`, or `cpu` |
+| `ML_USE_FP16` | `true` | Use FP16 inference on GPU (halves memory usage) |
+| `ML_BATCH_MAX_WAIT_MS` | `50` | Max wait time to collect batch requests (ms) |
+| `ML_BATCH_MAX_SIZE` | `64` | Max texts per batch for embedding |
+| `ML_BI_ENCODER_MODEL` | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` | Bi-encoder model |
+| `ML_CROSS_ENCODER_MODEL` | `cross-encoder/ms-marco-MiniLM-L-6-v2` | Cross-encoder model |
+
+**GPU Memory Usage** (FP16):
+- Bi-encoder: ~150 MB
+- Cross-encoder: ~100 MB
+- Total: ~300-400 MB with CUDA overhead
+
+The system uses **async batching** to efficiently process concurrent search requests. Multiple parallel search workers share a single batch inference call, reducing GPU memory pressure and improving throughput.
 
 ## Development
 
